@@ -6,13 +6,17 @@
 ;  MOUNT BLUE ENFORCER v5
 ; ═══════════════════════════════════════════════════════════════
 
+; ─── Inicializace proměnných PŘED vším ostatním (HotIf je vyhodnocuje okamžitě) ───
+global g_started        := false
+global g_done           := false
+global g_textReady      := false
+
 ; ─── AUTO-UPDATE KONFIGURACE ───────────────────────────────────
-; Nastav na svou GitHub raw URL po nahrání souborů (viz návod)
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
 THIS_SCRIPT_VERSION := 2   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
-UPDATE_TIMEOUT_MS   := 4000  ; max čekání na odpověď serveru (ms)
+UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
 CheckForUpdate()
