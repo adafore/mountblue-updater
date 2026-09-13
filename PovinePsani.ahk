@@ -58,8 +58,18 @@ CheckForUpdate() {
         return
     }
 
-    remoteVersion := Integer(Trim(FileRead(tempVerFile)))
+    raw := FileRead(tempVerFile, "UTF-8")
     FileDelete tempVerFile
+    ; Odstraň BOM, mezery, newlines, carriage returns
+    raw := StrReplace(raw, "`r", "")
+    raw := StrReplace(raw, "`n", "")
+    raw := StrReplace(raw, Chr(0xFEFF), "")  ; UTF-8 BOM
+    raw := Trim(raw)
+    if !IsInteger(raw) {
+        MsgBox "UPDATE DEBUG: version.txt neobsahuje cislo, obsah: [" . raw . "]"
+        return
+    }
+    remoteVersion := Integer(raw)
 
     MsgBox "UPDATE DEBUG: Remote = " . remoteVersion . "  |  Lokalni = " . THIS_SCRIPT_VERSION
 
