@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 2   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 3   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -26,94 +26,126 @@ APP_PATH          := "C:\Program Files (x86)\HYL\MountBlue\MountBlue.exe"
 DONE_FILE         := A_AppData . "\MountBlueEnforcer\done_" . FormatTime(, "yyyy-MM-dd") . ".txt"
 STATE_FILE        := A_AppData . "\MountBlueEnforcer\state_" . FormatTime(, "yyyy-MM-dd") . ".txt"
 DONE_DIR          := A_AppData . "\MountBlueEnforcer"
-MIN_TEXT_LEN      := 250
+MIN_TEXT_LEN      := 300
 START_HOUR        := 11
 OVERLAY_W         := 520
 POSTPONE_MAX      := 3
 POSTPONE_MIN      := 30
-WEEKLY_GOAL       := 2500     ; znaky pro týdenní cíl (7 dní)
+WEEKLY_GOAL       := 3000     ; znaky pro týdenní cíl (7 dní)
 ; ───────────────────────────────────────────────────────────────
 
 ; ═══════════════════════════════════════════════════════════════
 ;  AUTO-UPDATE — zkontroluje GitHub, stáhne novější verzi, restartuje
 ; ═══════════════════════════════════════════════════════════════
 CheckForUpdate() {
-    global UPDATE_VERSION_URL, UPDATE_SCRIPT_URL, LOCAL_VERSION_FILE, THIS_SCRIPT_VERSION
+    global UPDATE_VERSION_URL, UPDATE_SCRIPT_URL, THIS_SCRIPT_VERSION
 
     if InStr(UPDATE_VERSION_URL, "TVOJE_JMENO")
         return
 
-    remoteVersion := 0
     tempVerFile := A_Temp . "\mbe_version_check.txt"
 
     try {
         Download(UPDATE_VERSION_URL, tempVerFile)
-    } catch as e {
-        MsgBox "UPDATE DEBUG: Stazeni version.txt selhalo.`nChyba: " . e.Message
+    } catch {
         return
     }
 
-    if !FileExist(tempVerFile) {
-        MsgBox "UPDATE DEBUG: version.txt se nestahl."
+    if !FileExist(tempVerFile)
         return
-    }
 
     raw := FileRead(tempVerFile, "UTF-8")
     FileDelete tempVerFile
-    ; Odstraň BOM, mezery, newlines, carriage returns
     raw := StrReplace(raw, "`r", "")
     raw := StrReplace(raw, "`n", "")
-    raw := StrReplace(raw, Chr(0xFEFF), "")  ; UTF-8 BOM
+    raw := StrReplace(raw, Chr(0xFEFF), "")
     raw := Trim(raw)
-    if !IsInteger(raw) {
-        MsgBox "UPDATE DEBUG: version.txt neobsahuje cislo, obsah: [" . raw . "]"
+    if !IsInteger(raw)
         return
-    }
+
     remoteVersion := Integer(raw)
-
-    MsgBox "UPDATE DEBUG: Remote = " . remoteVersion . "  |  Lokalni = " . THIS_SCRIPT_VERSION
-
     if (remoteVersion <= THIS_SCRIPT_VERSION)
-        return
+        return  ; verze je aktuální — nic nezobrazuj
 
+    ; ── Nová verze — zobraz hezké oznámení ──
+    updateGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale", "Update")
+    updateGui.BackColor := "0A0F2E"
+    updateGui.MarginX := 0
+    updateGui.MarginY := 0
+
+    ; Modrý pruh nahoře
+    updateGui.Add("Text", "x0 y0 w340 h3 Background2A6FCC", "")
+
+    updateGui.SetFont("s11 w700 c2A6FCC", "Segoe UI")
+    updateGui.Add("Text", "x20 y16 w300", "Mount Blue  —  aktualizace")
+
+    updateGui.SetFont("s9 w400 c5BC8F5", "Segoe UI")
+    updateGui.Add("Text", "x20 y42 w300", "Stahuje se nová verze…")
+
+    updateGui.SetFont("s8 w400 c3A5080", "Segoe UI")
+    updateGui.Add("Text", "x20 y62 w300", "v" . THIS_SCRIPT_VERSION . "  →  v" . remoteVersion)
+
+    screenW := SysGet(78)
+    screenH := SysGet(79)
+    updateGui.Show("x" . (screenW//2 - 170) . " y" . (screenH - 130) . " w340 h92 NoActivate")
+
+    Sleep 400
+
+    ; ── Stáhni skript ──
     tempScriptFile := A_Temp . "\mbe_new_version.ahk"
     try {
         Download(UPDATE_SCRIPT_URL, tempScriptFile)
-    } catch as e {
-        MsgBox "UPDATE DEBUG: Stazeni skriptu selhalo: " . e.Message
+    } catch {
+        updateGui.Destroy()
         return
     }
 
     if !FileExist(tempScriptFile) {
-        MsgBox "UPDATE DEBUG: Skript se nestahl."
+        updateGui.Destroy()
         return
     }
-    fileSize := FileGetSize(tempScriptFile)
-    if (fileSize < 1000) {
-        MsgBox "UPDATE DEBUG: Soubor maly (" . fileSize . " B)."
+    if FileGetSize(tempScriptFile) < 1000 {
+        updateGui.Destroy()
         return
     }
     try {
         chk := FileRead(tempScriptFile, "UTF-8")
         if !InStr(chk, "#Requires AutoHotkey") {
-            MsgBox "UPDATE DEBUG: Soubor nevypada jako AHK skript."
+            updateGui.Destroy()
             return
         }
-    } catch as e {
-        MsgBox "UPDATE DEBUG: Nelze precist soubor: " . e.Message
+    } catch {
+        updateGui.Destroy()
         return
     }
 
+    ; ── Nahraď a restartuj ──
     currentScriptPath := A_ScriptFullPath
     try {
         FileCopy tempScriptFile, currentScriptPath, true
-    } catch as e {
-        MsgBox "UPDATE DEBUG: FileCopy selhal: " . e.Message . "`nCesta: " . currentScriptPath
+    } catch {
+        updateGui.Destroy()
         FileDelete tempScriptFile
         return
     }
     FileDelete tempScriptFile
-    MsgBox "UPDATE: Uspesna aktualizace — restartuju."
+
+    ; Aktualizuj text na "hotovo"
+    updateGui.Destroy()
+    doneGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale", "UpdateDone")
+    doneGui.BackColor := "0A0F2E"
+    doneGui.MarginX := 0
+    doneGui.MarginY := 0
+    doneGui.Add("Text", "x0 y0 w340 h3 Background2A6FCC", "")
+    doneGui.SetFont("s11 w700 c2A6FCC", "Segoe UI")
+    doneGui.Add("Text", "x20 y16 w300", "Mount Blue  —  aktualizace")
+    doneGui.SetFont("s9 w400 c3DFFA0", "Segoe UI")
+    doneGui.Add("Text", "x20 y42 w300", "✔  Aktualizováno na v" . remoteVersion . "  —  restartuji…")
+    doneGui.Show("x" . (screenW//2 - 170) . " y" . (screenH - 130) . " w340 h72 NoActivate")
+
+    Sleep 1200
+    doneGui.Destroy()
+
     Run '"' . A_AhkPath . '" "' . currentScriptPath . '"'
     ExitApp
 }
