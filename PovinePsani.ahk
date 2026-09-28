@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 3   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 4   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -804,10 +804,7 @@ EvaluateExercise() {
         g_weeklyDone := true
     SaveWeeklyState()
 
-    g_filterMode   := ""
-    g_filterLetter := ""
-    g_filterRepeat := 1
-    g_awaitLetter  := ""
+    ; Filtr se neresetuje tady — resetuje se až v ConfirmYes (ANO) nebo při resetu textu
 
     ; Zjisti jestli právě teď byl splněn denní cíl
     justFinishedDaily := (g_charsAccumulated >= MIN_TEXT_LEN && !g_dailyDone)
@@ -820,8 +817,8 @@ EvaluateExercise() {
         g_exerciseNum++
     }
 
-    ; Pokud napsal 150+ znaků NEBO max 5 chyb → zeptej se, jestli text dokončil
-    confirmNeeded := (g_lastCorrectChars >= 150 || g_lastErrors <= 5)
+    ; Confirm se zobrazí pokud napsal 300+ znaků NEBO max 5 chyb
+    confirmNeeded := (g_lastCorrectChars >= 300 || g_lastErrors <= 5)
 
     if justFinishedDaily || confirmNeeded {
         BlockInput "Off"
@@ -829,22 +826,19 @@ EvaluateExercise() {
         UpdateOverlay()
         UpdateTask()
 
-        ; Pokud byl splněn denní cíl → zapiš DONE soubor a zobraz modré tlačítko
         if justFinishedDaily
             Finish()
 
-        ; Zobraz potvrzovací tlačítka (pokud splnil podmínky pro confirm)
         if confirmNeeded
             ShowConfirm("Dokončil jsi cvičení?   znaky: " . g_lastCorrectChars . "  ·  chyby: " . g_lastErrors)
 
-        ; Pokud byl splněn denní cíl, ale NEbyl splněn confirm → ulož stav rovnou
         if justFinishedDaily && !confirmNeeded {
             SaveState()
         }
 
-        return   ; zbytek (pokud je confirm) vyřeší ConfirmYes/ConfirmNo
+        return   ; zbytek vyřeší ConfirmYes/ConfirmNo
     } else {
-        ; Nesplnil ani jednu podmínku → nechej text, jen vymaz napsaný
+        ; Nesplnil podmínky → nechej text i filtr, jen vymaz napsaný
         g_typedText := ""
         UpdateTypedPreview()
     }
