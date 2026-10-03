@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 5   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 6   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -820,30 +820,27 @@ EvaluateExercise() {
         g_exerciseNum++
     }
 
+    ; Po dennim cili pokracuj bez potvrzovani az do povinneho tydenniho cile.
+    if g_dailyDone {
+        UpdateOverlay()
+        UpdateTask()
+        Finish()
+        g_typedText := ""
+        UpdateTypedPreview()
+        return
+    }
+
     ; Confirm se zobrazí pokud napsal 300+ znaků NEBO max 5 chyb
     confirmNeeded := (g_lastCorrectChars >= 300 || g_lastErrors <= 5)
 
-    if justFinishedDaily || confirmNeeded || (g_dailyDone && g_weeklyDone) {
+    if confirmNeeded {
         BlockInput "Off"
         Suspend true
         UpdateOverlay()
         UpdateTask()
 
-        if justFinishedDaily || (g_dailyDone && g_weeklyDone)
-            Finish()
-
         if confirmNeeded
             ShowConfirm("Dokončil jsi cvičení?   znaky: " . g_lastCorrectChars . "  ·  chyby: " . g_lastErrors)
-
-        if justFinishedDaily && !confirmNeeded {
-            SaveState()
-            if IsWeeklyRequired() {
-                Suspend false
-                LockInput(true)
-                g_typedText := ""
-                UpdateTypedPreview()
-            }
-        }
 
         return   ; zbytek vyřeší ConfirmYes/ConfirmNo
     } else {
@@ -1622,7 +1619,7 @@ InitWeekWindow() {
 
     ; Načti datum startu okna
     try {
-        startStr := Trim(FileRead(g_weekStartFile))
+        startStr := ReadWeekStart()
         startDate := startStr . "000000"   ; AHK potřebuje plný timestamp
         daysPassed := DateDiff(A_Now, startDate, "Days")
 
@@ -1646,7 +1643,7 @@ InitWeekWindow() {
         ; Skutecne dokoncene dny obnov z existujicich dennich zaznamu.
         g_weeklyDays := 0
         g_weeklyLastDay := ""
-        startStr := Trim(FileRead(g_weekStartFile))
+        startStr := ReadWeekStart()
         loop Files DONE_DIR . "\done_*.txt" {
             if !RegExMatch(A_LoopFileName, "^done_(\d{4})-(\d{2})-(\d{2})\.txt$", &dateParts)
                 continue
@@ -1661,13 +1658,18 @@ InitWeekWindow() {
     }
 }
 
+ReadWeekStart() {
+    global g_weekStartFile
+    return Trim(FileRead(g_weekStartFile, "UTF-8"), " `t`r`n" . Chr(0xFEFF))
+}
+
 IsWeeklyRequired(now := "") {
     global g_weekStartFile, g_weeklyDone
     if g_weeklyDone
         return false
     if now = ""
         now := A_Now
-    startDate := Trim(FileRead(g_weekStartFile)) . "000000"
+    startDate := ReadWeekStart() . "000000"
     return DateDiff(now, startDate, "Days") >= 6
 }
 
@@ -1684,7 +1686,7 @@ LoadWeeklyState() {
         }
         if lines.Length >= 4 {
             global g_weeklyLastDay
-            g_weeklyLastDay := Trim(lines[4])
+            g_weeklyLastDay := Trim(lines[4], " `t`r`n")
         }
     }
 }
@@ -1747,9 +1749,9 @@ Finish() {
     SaveWeeklyState()
 
     if IsWeeklyRequired() {
-        lbl_status.Value := "Dokonci tydenni cil: " . g_weeklyChars . "/" . WEEKLY_GOAL . " znaku."
+        lbl_status.Value := "Dokončil jsi denní cíl, ale ještě musíš týdenní."
         return
     }
     LockInput(false)
-    ShowUnlockButton()
+    DoUnlock()
 }
