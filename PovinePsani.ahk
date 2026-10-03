@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 4   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 5   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -205,18 +205,21 @@ global g_btnNoBorder  := 0
 ; ═══════════════════════════════════════════════════════════════
 ;  START
 ; ═══════════════════════════════════════════════════════════════
-if FileExist(DONE_FILE)
-    ExitApp
-
 ; Týdenní cíl = rolling 7denní okno od PRVNÍHO spuštění programu (ne kalendářní týden)
 g_weekFile := A_AppData . "\MountBlueEnforcer\week_state.txt"
 g_weekStartFile := A_AppData . "\MountBlueEnforcer\week_start.txt"
+LoadWeeklyState()
 InitWeekWindow()
+
+if FileExist(DONE_FILE) {
+    if !IsWeeklyRequired()
+        ExitApp
+    g_dailyDone := true
+}
 
 ; Načti stav z předchozího sezení
 LoadState()
 
-LoadWeeklyState()
 ; Před 11:00 nedělej absolutně nic — jen čekej
 WaitUntilHour()
 
@@ -820,13 +823,13 @@ EvaluateExercise() {
     ; Confirm se zobrazí pokud napsal 300+ znaků NEBO max 5 chyb
     confirmNeeded := (g_lastCorrectChars >= 300 || g_lastErrors <= 5)
 
-    if justFinishedDaily || confirmNeeded {
+    if justFinishedDaily || confirmNeeded || (g_dailyDone && g_weeklyDone) {
         BlockInput "Off"
         Suspend true
         UpdateOverlay()
         UpdateTask()
 
-        if justFinishedDaily
+        if justFinishedDaily || (g_dailyDone && g_weeklyDone)
             Finish()
 
         if confirmNeeded
@@ -834,6 +837,12 @@ EvaluateExercise() {
 
         if justFinishedDaily && !confirmNeeded {
             SaveState()
+            if IsWeeklyRequired() {
+                Suspend false
+                LockInput(true)
+                g_typedText := ""
+                UpdateTypedPreview()
+            }
         }
 
         return   ; zbytek vyřeší ConfirmYes/ConfirmNo
@@ -1313,6 +1322,8 @@ ShowUnlockButton() {
 
 DoUnlock() {
     global g_overlay, g_btnUnlockGui, g_btnUnlockBorder
+    if IsWeeklyRequired()
+        return
     ; Odblokuj vstup PŘED ukončením — jinak Windows zůstane zamčený
     try BlockInput "Off"
     try Suspend false
@@ -1597,7 +1608,8 @@ ActivateMountBlue(maxTries := 5) {
 
 ; ─── Inicializace 7denního rolling okna pro týdenní cíl ───────
 InitWeekWindow() {
-    global g_weekStartFile, DONE_DIR
+    global g_weekStartFile, g_weekFile, DONE_DIR
+    global g_weeklyChars, g_weeklyDays, g_weeklyDone, g_weeklyLastDay
 
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
@@ -1616,21 +1628,47 @@ InitWeekWindow() {
 
         ; Pokud uplynulo 7 nebo více dní → posuň okno o tolik celých týdnů,
         ; kolik jich uplynulo (aby se okno nezasekávalo, pokud PC nebylo dlouho zapnuté)
-        if (daysPassed >= 7) {
+        if (daysPassed >= 7 && g_weeklyDone) {
             weeksToAdd := daysPassed // 7
             newStart := DateAdd(startDate, weeksToAdd * 7, "Days")
             newStartStr := FormatTime(newStart, "yyyyMMdd")
             try FileDelete g_weekStartFile
             FileAppend newStartStr, g_weekStartFile
 
-            ; Nové okno = vynuluj týdenní progres (poslední okno nebylo splněno)
-            global g_weeklyChars, g_weeklyDays, g_weeklyDone
+            ; Nesplneny cil se nikdy nemaze; nove okno zacina az po splneni.
             g_weeklyChars := 0
             g_weeklyDays  := 0
             g_weeklyDone  := false
-            try FileDelete g_weekFile
+            g_weeklyLastDay := ""
+            SaveWeeklyState()
         }
+        ; Stare verze prepisovaly posledni den pri kazdem ulozeni znaku.
+        ; Skutecne dokoncene dny obnov z existujicich dennich zaznamu.
+        g_weeklyDays := 0
+        g_weeklyLastDay := ""
+        startStr := Trim(FileRead(g_weekStartFile))
+        loop Files DONE_DIR . "\done_*.txt" {
+            if !RegExMatch(A_LoopFileName, "^done_(\d{4})-(\d{2})-(\d{2})\.txt$", &dateParts)
+                continue
+            dayStr := dateParts[1] . dateParts[2] . dateParts[3]
+            if dayStr < startStr || dayStr > FormatTime(, "yyyyMMdd")
+                continue
+            g_weeklyDays++
+            if dayStr > g_weeklyLastDay
+                g_weeklyLastDay := dayStr
+        }
+        SaveWeeklyState()
     }
+}
+
+IsWeeklyRequired(now := "") {
+    global g_weekStartFile, g_weeklyDone
+    if g_weeklyDone
+        return false
+    if now = ""
+        now := A_Now
+    startDate := Trim(FileRead(g_weekStartFile)) . "000000"
+    return DateDiff(now, startDate, "Days") >= 6
 }
 
 LoadWeeklyState() {
@@ -1642,7 +1680,7 @@ LoadWeeklyState() {
         if lines.Length >= 3 {
             g_weeklyChars := Integer(lines[1])
             g_weeklyDays  := Integer(lines[2])
-            g_weeklyDone  := Integer(lines[3]) = 1
+            g_weeklyDone  := g_weeklyChars >= WEEKLY_GOAL
         }
         if lines.Length >= 4 {
             global g_weeklyLastDay
@@ -1652,11 +1690,13 @@ LoadWeeklyState() {
 }
 
 SaveWeeklyState() {
-    global g_weekFile, g_weeklyChars, g_weeklyDays, g_weeklyDone, DONE_DIR
+    global g_weekFile, g_weeklyChars, g_weeklyDays, g_weeklyDone, g_weeklyLastDay, DONE_DIR
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
-    try FileDelete g_weekFile
-    FileAppend g_weeklyChars . "`n" . g_weeklyDays . "`n" . (g_weeklyDone ? 1 : 0) . "`n" . FormatTime(, "yyyyMMdd"), g_weekFile
+    file := FileOpen(g_weekFile . ".tmp", "w", "UTF-8")
+    file.Write(g_weeklyChars . "`n" . g_weeklyDays . "`n" . (g_weeklyDone ? 1 : 0) . "`n" . g_weeklyLastDay)
+    file.Close()
+    FileMove g_weekFile . ".tmp", g_weekFile, true
 }
 
 SaveState() {
@@ -1682,7 +1722,7 @@ LoadState() {
 }
 
 Finish() {
-    global g_overlay, DONE_DIR, DONE_FILE, g_typedText, g_charsAccumulated
+    global g_overlay, DONE_DIR, DONE_FILE, g_typedText, g_charsAccumulated, lbl_status
     global g_weeklyChars, g_weeklyDays, g_weeklyDone, WEEKLY_GOAL
 
     SaveState()
@@ -1694,7 +1734,8 @@ Finish() {
     rand8     := Random(10000000, 99999999)
     checkNum  := dayNum * rand8
     safeTyped := StrReplace(StrReplace(g_typedText, "`r", " "), "`n", " ")
-    FileAppend timestamp . "`n" . checkNum . "`n" . "dokonceni=normalne`n" . g_charsAccumulated . "`n" . safeTyped . "`n", DONE_FILE
+    if !FileExist(DONE_FILE)
+        FileAppend timestamp . "`n" . checkNum . "`n" . "dokonceni=normalne`n" . g_charsAccumulated . "`n" . safeTyped . "`n", DONE_FILE
 
     ; Týdenní dny — přičti jen pokud dnes ještě nebyl přičten
     global g_weeklyLastDay
@@ -1705,7 +1746,10 @@ Finish() {
     }
     SaveWeeklyState()
 
+    if IsWeeklyRequired() {
+        lbl_status.Value := "Dokonci tydenni cil: " . g_weeklyChars . "/" . WEEKLY_GOAL . " znaku."
+        return
+    }
     LockInput(false)
-
     ShowUnlockButton()
 }
