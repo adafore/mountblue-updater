@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 7   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 8   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -534,6 +534,14 @@ BackSpace:: HandleKeyBS()
 ; Klik myší = vyhodnoť a resetuj napsaný text (jen pokud je text připraven)
 Home:: {
     ForceResumeNow()
+}
+
+#HotIf g_started && !g_done && g_postponedUntil = 0
+$Pause:: {
+    SaveState()
+    SaveWeeklyState()
+    BlockInput "Off"
+    Reload()
 }
 
 #HotIf
