@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 8   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 9   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -1313,7 +1313,8 @@ ShowUnlockButton() {
     title := g_btnUnlockGui.Add("Text", "x0 y14 w" . btnW . " h26 Center +0x200", "🔓  ODEMKNOUT PC")
 
     g_btnUnlockGui.SetFont("s9 w400 cBBDDFF", "Segoe UI")
-    weekTxt := g_weeklyDone ? "🏆 Týdenní cíl splněn!  ·  " . g_weeklyDays . "/7 dní" : "Týden: " . g_weeklyChars . " / " . WEEKLY_GOAL . " znaků  ·  " . g_weeklyDays . "/7 dní"
+    weekDay := GetWeeklyDay()
+    weekTxt := g_weeklyDone ? "🏆 Týdenní cíl splněn!  ·  den " . weekDay . "/7" : "Týden: " . g_weeklyChars . " / " . WEEKLY_GOAL . " znaků  ·  den " . weekDay . "/7"
     g_btnUnlockGui.Add("Text", "x0 y44 w" . btnW . " h20 Center +0x200", weekTxt)
 
     g_btnUnlockGui.SetFont("s8 w400 c88AACC", "Segoe UI")
@@ -1415,12 +1416,13 @@ UpdateTask() {
     try g_overlay["PROG_BAR"].Value := pct
 
     ; Týdenní progress
+    weekDay := GetWeeklyDay()
     if IsObject(lbl_weekly) {
         if g_weeklyDone {
-            lbl_weekly.Value := "Týden  ·  🏆 Splněn!  " . g_weeklyDays . "/7 dní"
+            lbl_weekly.Value := "Týden  ·  🏆 Splněn!  den " . weekDay . "/7"
             lbl_weekly.SetFont("c00EE88")
         } else {
-            lbl_weekly.Value := "Týden  ·  " . g_weeklyChars . " / " . WEEKLY_GOAL . " znaků  ·  " . g_weeklyDays . "/7 dní"
+            lbl_weekly.Value := "Týden  ·  " . g_weeklyChars . " / " . WEEKLY_GOAL . " znaků  ·  den " . weekDay . "/7"
             lbl_weekly.SetFont("c4499FF")
         }
     }
@@ -1677,10 +1679,14 @@ IsWeeklyRequired(now := "") {
 }
 
 IsWeeklyDeadline(now := "") {
+    return GetWeeklyDay(now) = 7
+}
+
+GetWeeklyDay(now := "") {
     if now = ""
         now := A_Now
     startDate := ReadWeekStart() . "000000"
-    return DateDiff(now, startDate, "Days") >= 6
+    return Min(7, Max(1, DateDiff(now, startDate, "Days") + 1))
 }
 
 LoadWeeklyState() {
@@ -1757,6 +1763,7 @@ Finish() {
         g_weeklyLastDay := todayStr
     }
     SaveWeeklyState()
+    UpdateTask()
 
     if IsWeeklyRequired() {
         lbl_status.Value := "Dokončil jsi denní cíl, ale ještě musíš týdenní."
