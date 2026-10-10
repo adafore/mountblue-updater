@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 9   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 10   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ global g_btnNoBorder  := 0
 ; ═══════════════════════════════════════════════════════════════
 ;  START
 ; ═══════════════════════════════════════════════════════════════
-; Týdenní cíl = rolling 7denní okno od PRVNÍHO spuštění programu (ne kalendářní týden)
+; Tydenni obdobi obsahuje sedm dokoncenych dennich cilu.
 g_weekFile := A_AppData . "\MountBlueEnforcer\week_state.txt"
 g_weekStartFile := A_AppData . "\MountBlueEnforcer\week_start.txt"
 LoadWeeklyState()
@@ -1613,56 +1613,52 @@ ActivateMountBlue(maxTries := 5) {
     return hwnd != 0
 }
 
-; ─── Inicializace 7denního rolling okna pro týdenní cíl ───────
-InitWeekWindow() {
+; Sedm treninkovych dnu; nedokoncene dny zachovaji znaky i poradi dne.
+InitWeekWindow(now := "") {
     global g_weekStartFile, g_weekFile, DONE_DIR
     global g_weeklyChars, g_weeklyDays, g_weeklyDone, g_weeklyLastDay
 
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
 
+    if now = ""
+        now := A_Now
+    todayStr := FormatTime(now, "yyyyMMdd")
+
     ; Pokud soubor s datem startu neexistuje → toto je úplně první spuštění
     if !FileExist(g_weekStartFile) {
-        FileAppend FormatTime(, "yyyyMMdd"), g_weekStartFile
-        return
+        FileAppend todayStr, g_weekStartFile
     }
 
     ; Načti datum startu okna
     try {
         startStr := ReadWeekStart()
-        startDate := startStr . "000000"   ; AHK potřebuje plný timestamp
-        daysPassed := DateDiff(A_Now, startDate, "Days")
-
-        ; Pokud uplynulo 7 nebo více dní → posuň okno o tolik celých týdnů,
-        ; kolik jich uplynulo (aby se okno nezasekávalo, pokud PC nebylo dlouho zapnuté)
-        if (daysPassed >= 7 && g_weeklyDone) {
-            weeksToAdd := daysPassed // 7
-            newStart := DateAdd(startDate, weeksToAdd * 7, "Days")
-            newStartStr := FormatTime(newStart, "yyyyMMdd")
-            try FileDelete g_weekStartFile
-            FileAppend newStartStr, g_weekStartFile
-
-            ; Nesplneny cil se nikdy nemaze; nove okno zacina az po splneni.
-            g_weeklyChars := 0
-            g_weeklyDays  := 0
-            g_weeklyDone  := false
-            g_weeklyLastDay := ""
-            SaveWeeklyState()
-        }
         ; Stare verze prepisovaly posledni den pri kazdem ulozeni znaku.
         ; Skutecne dokoncene dny obnov z existujicich dennich zaznamu.
         g_weeklyDays := 0
         g_weeklyLastDay := ""
-        startStr := ReadWeekStart()
         loop Files DONE_DIR . "\done_*.txt" {
             if !RegExMatch(A_LoopFileName, "^done_(\d{4})-(\d{2})-(\d{2})\.txt$", &dateParts)
                 continue
             dayStr := dateParts[1] . dateParts[2] . dateParts[3]
-            if dayStr < startStr || dayStr > FormatTime(, "yyyyMMdd")
+            if dayStr < startStr || dayStr > todayStr
                 continue
-            g_weeklyDays++
-            if dayStr > g_weeklyLastDay
+            g_weeklyDays := Min(7, g_weeklyDays + 1)
+            if g_weeklyLastDay = "" || dayStr > g_weeklyLastDay
                 g_weeklyLastDay := dayStr
+        }
+
+        ; Zacni dalsi obdobi az po sedmi splnenych dnech a splneni celeho cile.
+        ; Restart ve stejnem dni nesmi uzavrene obdobi znovu otevrit.
+        if g_weeklyDays >= 7 && g_weeklyDone && g_weeklyLastDay < todayStr {
+            file := FileOpen(g_weekStartFile . ".tmp", "w", "UTF-8")
+            file.Write(todayStr)
+            file.Close()
+            FileMove g_weekStartFile . ".tmp", g_weekStartFile, true
+            g_weeklyChars := 0
+            g_weeklyDays := 0
+            g_weeklyDone := false
+            g_weeklyLastDay := ""
         }
         SaveWeeklyState()
     }
@@ -1683,10 +1679,11 @@ IsWeeklyDeadline(now := "") {
 }
 
 GetWeeklyDay(now := "") {
+    global g_weeklyDays, g_weeklyLastDay
     if now = ""
         now := A_Now
-    startDate := ReadWeekStart() . "000000"
-    return Min(7, Max(1, DateDiff(now, startDate, "Days") + 1))
+    todayStr := FormatTime(now, "yyyyMMdd")
+    return Min(7, Max(1, g_weeklyDays + (g_weeklyLastDay = todayStr ? 0 : 1)))
 }
 
 LoadWeeklyState() {
@@ -1759,7 +1756,7 @@ Finish() {
     global g_weeklyLastDay
     todayStr := FormatTime(, "yyyyMMdd")
     if (g_weeklyLastDay != todayStr) {
-        g_weeklyDays += 1
+        g_weeklyDays := Min(7, g_weeklyDays + 1)
         g_weeklyLastDay := todayStr
     }
     SaveWeeklyState()
