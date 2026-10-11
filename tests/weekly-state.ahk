@@ -2,7 +2,7 @@
 global DONE_DIR := A_ScriptDir . "\..\..\weekly-state-test-" . DllCall("GetCurrentProcessId")
 global g_weekFile := DONE_DIR . "\week_state.txt"
 global g_weekStartFile := DONE_DIR . "\week_start.txt"
-global WEEKLY_GOAL := 3000
+global WEEKLY_GOAL := 2500
 global g_weeklyChars := 0, g_weeklyDays := 0, g_weeklyDone := false, g_weeklyLastDay := ""
 DirCreate DONE_DIR
 WriteTestFile(g_weekStartFile, Chr(0xFEFF) . "20261001`r`n")
@@ -28,10 +28,10 @@ Assert(!IsWeeklyRequired("20261003120000"), "missed day does not trigger weekly 
 InitWeekWindow("20261020120000")
 Assert(g_weeklyChars = 366 && GetWeeklyDay("20261020120000") = 2, "calendar gaps preserve training day and characters")
 
-g_weeklyChars := 3000
+g_weeklyChars := WEEKLY_GOAL
 g_weeklyDone := true
 InitWeekWindow("20261020120000")
-Assert(g_weeklyChars = 3000 && g_weeklyDays = 1, "early weekly completion does not skip remaining daily goals")
+Assert(g_weeklyChars = WEEKLY_GOAL && g_weeklyDays = 1, "early weekly completion does not skip remaining daily goals")
 Assert(ReadWeekStart() = "20261001", "seven calendar days do not reset an unfinished training period")
 g_weeklyChars := 366
 g_weeklyDone := false
@@ -47,10 +47,10 @@ Assert(g_weeklyDays = 6, "restart does not duplicate completed days")
 WriteTestFile(DONE_DIR . "\done_2026-10-15.txt", "completed")
 InitWeekWindow("20261015120000")
 Assert(g_weeklyDays = 7 && g_weeklyChars = 366 && IsWeeklyRequired("20261015120000"), "seventh daily goal retains incomplete weekly progress")
-g_weeklyChars := 3000
+g_weeklyChars := WEEKLY_GOAL
 g_weeklyDone := true
 InitWeekWindow("20261015120000")
-Assert(g_weeklyChars = 3000 && ReadWeekStart() = "20261001", "same-day restart preserves completed seventh day")
+Assert(g_weeklyChars = WEEKLY_GOAL && ReadWeekStart() = "20261001", "same-day restart preserves completed seventh day")
 Assert(!IsWeeklyRequired("20261015120000") && IsWeeklyDeadline("20261015120000"), "completed seventh day allows automatic unlock")
 InitWeekWindow("20261016120000")
 Assert(g_weeklyChars = 0 && g_weeklyDays = 0 && !g_weeklyDone, "next period starts only after seven completed days and weekly goal")

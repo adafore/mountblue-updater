@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 10   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 11   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -26,12 +26,12 @@ APP_PATH          := "C:\Program Files (x86)\HYL\MountBlue\MountBlue.exe"
 DONE_FILE         := A_AppData . "\MountBlueEnforcer\done_" . FormatTime(, "yyyy-MM-dd") . ".txt"
 STATE_FILE        := A_AppData . "\MountBlueEnforcer\state_" . FormatTime(, "yyyy-MM-dd") . ".txt"
 DONE_DIR          := A_AppData . "\MountBlueEnforcer"
-MIN_TEXT_LEN      := 300
+MIN_TEXT_LEN      := 250
 START_HOUR        := 11
 OVERLAY_W         := 520
 POSTPONE_MAX      := 3
 POSTPONE_MIN      := 30
-WEEKLY_GOAL       := 3000     ; znaky pro týdenní cíl (7 dní)
+WEEKLY_GOAL       := 2500     ; znaky pro týdenní cíl (7 dní)
 ; ───────────────────────────────────────────────────────────────
 
 ; ═══════════════════════════════════════════════════════════════
