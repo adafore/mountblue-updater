@@ -15,7 +15,7 @@ global g_textReady      := false
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 11   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 12   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -23,9 +23,11 @@ CheckForUpdate()
 
 ; ─── KONFIGURACE ───────────────────────────────────────────────
 APP_PATH          := "C:\Program Files (x86)\HYL\MountBlue\MountBlue.exe"
-DONE_FILE         := A_AppData . "\MountBlueEnforcer\done_" . FormatTime(, "yyyy-MM-dd") . ".txt"
-STATE_FILE        := A_AppData . "\MountBlueEnforcer\state_" . FormatTime(, "yyyy-MM-dd") . ".txt"
 DONE_DIR          := A_AppData . "\MountBlueEnforcer"
+SESSION_DAY       := ""
+DONE_FILE         := ""
+STATE_FILE        := ""
+SetDayFiles()
 MIN_TEXT_LEN      := 250
 START_HOUR        := 11
 OVERLAY_W         := 520
@@ -162,6 +164,7 @@ global g_passedCount    := 0
 global g_lastErrors     := -1
 global g_lastCorrectChars := 0
 global g_lastResult     := ""
+global g_evaluating     := false
 global g_exerciseNum       := 1       ; číslo aktuálního cvičení
 global g_charsAccumulated  := 0       ; součet správně zarovnaných znaků
 global g_weeklyChars      := 0     ; znaky naakumulované pro týdenní cíl
@@ -221,7 +224,10 @@ if FileExist(DONE_FILE) {
 LoadState()
 
 ; Před 11:00 nedělej absolutně nic — jen čekej
+SetTimer CheckDateChange, 1000
 WaitUntilHour()
+if CheckDateChange()
+    return
 
 ; Dvojitá pojistka — po probuzení zkontroluj čas znovu
 if Integer(FormatTime(, "H")) < START_HOUR
@@ -268,7 +274,7 @@ ClipboardChanged(DataType) {
     global g_sourceText, g_lastResult, g_lastErrors, g_textReady
     global g_done, g_typedText, g_exerciseNum, lbl_status, g_overlay
 
-    if (DataType != 1 || g_done)
+    if (DataType != 1 || g_done || CheckDateChange())
         return
 
     copied := Trim(A_Clipboard)
@@ -538,6 +544,8 @@ Home:: {
 
 #HotIf g_started && !g_done && g_postponedUntil = 0
 $Pause:: {
+    if CheckDateChange()
+        return
     SaveState()
     SaveWeeklyState()
     BlockInput "Off"
@@ -785,6 +793,18 @@ LevenshteinWord(a, b) {
 ;  VYHODNOCENÍ
 ; ═══════════════════════════════════════════════════════════════
 EvaluateExercise() {
+    global g_evaluating
+    if g_evaluating || CheckDateChange()
+        return
+    g_evaluating := true
+    try {
+        EvaluateExerciseInput()
+    } finally {
+        g_evaluating := false
+    }
+}
+
+EvaluateExerciseInput() {
     global g_sourceText, g_typedText, g_passedCount, g_lastErrors
     global g_lastResult, g_lastCorrectChars, g_done, MIN_TEXT_LEN
     global g_exerciseNum, lbl_status, g_overlay, g_textReady, g_charsAccumulated
@@ -805,6 +825,9 @@ EvaluateExercise() {
     }
 
     expected := BuildExpected(g_sourceText)
+    ; Spotrebuj odevzdany text pred vyhodnocenim, aby opozdeny klik neudelil body znovu.
+    g_typedText := ""
+    UpdateTypedPreview()
     g_lastErrors := CountWordErrors(typedText, expected)
     g_lastCorrectChars := CountCorrectChars(typedText, expected)
     g_charsAccumulated += g_lastCorrectChars
@@ -832,9 +855,7 @@ EvaluateExercise() {
     if g_dailyDone {
         UpdateOverlay()
         UpdateTask()
-        Finish()
-        g_typedText := ""
-        UpdateTypedPreview()
+        Finish(typedText)
         return
     }
 
@@ -842,6 +863,7 @@ EvaluateExercise() {
     confirmNeeded := (g_lastCorrectChars >= 300 || g_lastErrors <= 5)
 
     if confirmNeeded {
+        SaveState()
         BlockInput "Off"
         Suspend true
         UpdateOverlay()
@@ -851,10 +873,6 @@ EvaluateExercise() {
             ShowConfirm("Dokončil jsi cvičení?   znaky: " . g_lastCorrectChars . "  ·  chyby: " . g_lastErrors)
 
         return   ; zbytek vyřeší ConfirmYes/ConfirmNo
-    } else {
-        ; Nesplnil podmínky → nechej text i filtr, jen vymaz napsaný
-        g_typedText := ""
-        UpdateTypedPreview()
     }
 
     SaveState()
@@ -867,7 +885,7 @@ EvaluateExercise() {
 ; ═══════════════════════════════════════════════════════════════
 DoPostpone() {
     global g_postponeCount, g_postponedUntil, POSTPONE_MAX, POSTPONE_MIN, g_overlay
-    if g_postponeCount >= POSTPONE_MAX
+    if CheckDateChange() || g_postponedUntil > 0 || g_postponeCount >= POSTPONE_MAX
         return
     g_postponeCount++
     msDelay := POSTPONE_MIN * 60 * 1000
@@ -887,7 +905,7 @@ DoPostpone() {
 
 ShowOverlayAgain() {
     global g_overlay, g_done, g_postponedUntil
-    if g_done
+    if g_done || CheckDateChange()
         return
     g_postponedUntil := 0
     ; Obnov timery
@@ -907,7 +925,7 @@ ShowOverlayAgain() {
 
 ForceResumeNow() {
     global g_postponedUntil, g_done, g_overlay
-    if g_done
+    if g_done || CheckDateChange()
         return
     if (g_postponedUntil > 0 && A_TickCount < g_postponedUntil) {
         SetTimer ShowOverlayAgain, 0
@@ -1328,7 +1346,7 @@ ShowUnlockButton() {
 
 DoUnlock() {
     global g_overlay, g_btnUnlockGui, g_btnUnlockBorder
-    if IsWeeklyRequired()
+    if CheckDateChange() || IsWeeklyRequired()
         return
     ; Odblokuj vstup PŘED ukončením — jinak Windows zůstane zamčený
     try BlockInput "Off"
@@ -1436,7 +1454,7 @@ UpdateOverlay(statusOverride := "") {
     global lbl_confirm, btn_confirm_yes, btn_confirm_no
     global lbl_weekly
     global lbl_result, lbl_errors, btn_postpone
-    global MIN_TEXT_LEN, POSTPONE_MAX, g_done
+    global MIN_TEXT_LEN, POSTPONE_MAX, POSTPONE_MIN, g_done
 
     if !IsObject(g_overlay)
         return
@@ -1511,6 +1529,8 @@ UpdateOverlay(statusOverride := "") {
         lbl_postpone.Value := "odložení:  " . POSTPONE_MAX . " / " . POSTPONE_MAX . "  (vyčerpáno)"
         lbl_postpone.SetFont("c484C6E")
     } else {
+        btn_postpone.Enabled := true
+        btn_postpone.Text := "⏸  Odložit  ( " . POSTPONE_MIN . " min )"
         lbl_postpone.Value := "odložení:  " . g_postponeCount . " / " . POSTPONE_MAX
         lbl_postpone.SetFont("c7A7FA8")
     }
@@ -1548,6 +1568,34 @@ LockInput(state) {
         g_locked := false
         BlockInput "Off"
     }
+}
+
+SetDayFiles(now := "") {
+    global SESSION_DAY, DONE_DIR, DONE_FILE, STATE_FILE
+    if now = ""
+        now := A_Now
+    SESSION_DAY := FormatTime(now, "yyyy-MM-dd")
+    DONE_FILE := DONE_DIR . "\done_" . SESSION_DAY . ".txt"
+    STATE_FILE := DONE_DIR . "\state_" . SESSION_DAY . ".txt"
+}
+
+IsNewDay(now := "") {
+    global SESSION_DAY
+    if now = ""
+        now := A_Now
+    return FormatTime(now, "yyyy-MM-dd") != SESSION_DAY
+}
+
+CheckDateChange(now := "") {
+    if !IsNewDay(now)
+        return false
+
+    ; Uloz jeste do puvodniho dne; Reload nacte novy den a obnovi cele UI.
+    SaveState()
+    SaveWeeklyState()
+    BlockInput "Off"
+    Reload()
+    return true
 }
 
 WaitUntilHour() {
@@ -1651,10 +1699,7 @@ InitWeekWindow(now := "") {
         ; Zacni dalsi obdobi az po sedmi splnenych dnech a splneni celeho cile.
         ; Restart ve stejnem dni nesmi uzavrene obdobi znovu otevrit.
         if g_weeklyDays >= 7 && g_weeklyDone && g_weeklyLastDay < todayStr {
-            file := FileOpen(g_weekStartFile . ".tmp", "w", "UTF-8")
-            file.Write(todayStr)
-            file.Close()
-            FileMove g_weekStartFile . ".tmp", g_weekStartFile, true
+            WriteStateFile(g_weekStartFile, todayStr)
             g_weeklyChars := 0
             g_weeklyDays := 0
             g_weeklyDone := false
@@ -1708,35 +1753,51 @@ SaveWeeklyState() {
     global g_weekFile, g_weeklyChars, g_weeklyDays, g_weeklyDone, g_weeklyLastDay, DONE_DIR
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
-    file := FileOpen(g_weekFile . ".tmp", "w", "UTF-8")
-    file.Write(g_weeklyChars . "`n" . g_weeklyDays . "`n" . (g_weeklyDone ? 1 : 0) . "`n" . g_weeklyLastDay)
-    file.Close()
-    FileMove g_weekFile . ".tmp", g_weekFile, true
+    WriteStateFile(g_weekFile, g_weeklyChars . "`n" . g_weeklyDays . "`n" . (g_weeklyDone ? 1 : 0) . "`n" . g_weeklyLastDay)
 }
 
 SaveState() {
     global STATE_FILE, DONE_DIR, g_postponeCount, g_charsAccumulated, g_exerciseNum
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
-    try FileDelete STATE_FILE
-    FileAppend g_postponeCount . "`n" . g_charsAccumulated . "`n" . g_exerciseNum, STATE_FILE
+    WriteStateFile(STATE_FILE, g_postponeCount . "`n" . g_charsAccumulated . "`n" . g_exerciseNum)
+}
+
+WriteStateFile(path, contents) {
+    previousCritical := A_IsCritical
+    Critical "On"
+    file := 0
+    try {
+        file := FileOpen(path . ".tmp", "w", "UTF-8")
+        file.Write(contents)
+        file.Close()
+        file := 0
+        FileMove path . ".tmp", path, true
+    } finally {
+        if IsObject(file)
+            file.Close()
+        Critical previousCritical
+    }
 }
 
 LoadState() {
-    global STATE_FILE, g_postponeCount, g_charsAccumulated, g_exerciseNum
+    global STATE_FILE, g_postponeCount, g_charsAccumulated, g_exerciseNum, POSTPONE_MAX
+    g_postponeCount := 0
+    g_charsAccumulated := 0
+    g_exerciseNum := 1
     if !FileExist(STATE_FILE)
         return
     try {
         lines := StrSplit(FileRead(STATE_FILE), "`n")
         if lines.Length >= 3 {
-            g_postponeCount    := Integer(lines[1])
-            g_charsAccumulated := Integer(lines[2])
+            g_postponeCount    := Min(POSTPONE_MAX, Max(Integer(lines[1]), 0))
+            g_charsAccumulated := Max(Integer(lines[2]), 0)
             g_exerciseNum      := Max(Integer(lines[3]), 1)
         }
     }
 }
 
-Finish() {
+Finish(typedText := "") {
     global g_overlay, DONE_DIR, DONE_FILE, g_typedText, g_charsAccumulated, lbl_status
     global g_weeklyChars, g_weeklyDays, g_weeklyDone, WEEKLY_GOAL
 
@@ -1748,7 +1809,9 @@ Finish() {
     dayNum    := Integer(FormatTime(, "d"))
     rand8     := Random(10000000, 99999999)
     checkNum  := dayNum * rand8
-    safeTyped := StrReplace(StrReplace(g_typedText, "`r", " "), "`n", " ")
+    if typedText = ""
+        typedText := g_typedText
+    safeTyped := StrReplace(StrReplace(typedText, "`r", " "), "`n", " ")
     if !FileExist(DONE_FILE)
         FileAppend timestamp . "`n" . checkNum . "`n" . "dokonceni=normalne`n" . g_charsAccumulated . "`n" . safeTyped . "`n", DONE_FILE
 
