@@ -10,12 +10,14 @@
 global g_started        := false
 global g_done           := false
 global g_textReady      := false
+global g_locked         := false
+global g_mode           := "starting"
 
 ; ─── AUTO-UPDATE KONFIGURACE ───────────────────────────────────
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 12   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 13   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -28,12 +30,14 @@ SESSION_DAY       := ""
 DONE_FILE         := ""
 STATE_FILE        := ""
 SetDayFiles()
-MIN_TEXT_LEN      := 250
+DEFAULT_DAILY_GOAL := 250
+BROTHER_DAILY_GOAL := 300
+MIN_TEXT_LEN      := DEFAULT_DAILY_GOAL
 START_HOUR        := 11
 OVERLAY_W         := 520
 POSTPONE_MAX      := 3
 POSTPONE_MIN      := 30
-WEEKLY_GOAL       := 2500     ; znaky pro týdenní cíl (7 dní)
+WEEKLY_GOAL       := MIN_TEXT_LEN * 10
 ; ───────────────────────────────────────────────────────────────
 
 ; ═══════════════════════════════════════════════════════════════
@@ -192,6 +196,13 @@ global g_lastClipboard  := ""
 ; Odložení
 global g_postponeCount  := 0
 global g_postponedUntil := 0
+global g_mode := "starting"
+global g_device := Map()
+global g_log := Map()
+global g_inputHook := 0
+global g_caret := 0
+global g_anchor := 0
+global g_retryGui := 0
 
 ; Overlay labely
 global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
@@ -209,6 +220,11 @@ global g_btnNoBorder  := 0
 ;  START
 ; ═══════════════════════════════════════════════════════════════
 ; Tydenni obdobi obsahuje sedm dokoncenych dennich cilu.
+InitDeviceConfig()
+if HasArgument("--setup") {
+    ShowDeviceSetup()
+    return
+}
 g_weekFile := A_AppData . "\MountBlueEnforcer\week_state.txt"
 g_weekStartFile := A_AppData . "\MountBlueEnforcer\week_start.txt"
 LoadWeeklyState()
@@ -234,38 +250,17 @@ if Integer(FormatTime(, "H")) < START_HOUR
     ExitApp
 
 g_started := true
-
-if !ProcessExist("MountBlue.exe")
-    Run APP_PATH
-
-loop 60 {
-    hwnd := WinExist("ahk_exe MountBlue.exe")
-    if hwnd
-        break
-    Sleep 500
-}
-if !hwnd {
-    MsgBox "MountBlue se nepodarilo spustit!"
-    ExitApp
-}
-
-Sleep 1500
-ActivateMountBlue(8)
-Sleep 500
-
-; Vymaz starou schranku jeste pred zapnutim sledovani, aby se nenacetl text z minula.
-try A_Clipboard := ""
-g_lastClipboard := A_Clipboard
-
-; Sledování schránky — automaticky načte zadaný text
-OnClipboardChange ClipboardChanged
-
-LockInput(true)
+InitPracticeLogs()
+OnExit PracticeExit
+StartPracticeInput()
 CreateOverlay()
-
-SetTimer WatchWindow,    1000
-SetTimer PollClipboard,  800
+SetTimer WatchWindow, 1000
+SetTimer PollClipboard, 800
+SetTimer FlushPracticeLogs, 2000
+SetTimer SyncSharedLogs, 15000
+TryStartPractice()
 return
+
 
 ; ═══════════════════════════════════════════════════════════════
 ;  SCHRÁNKA — automatické načtení zadaného textu
@@ -273,9 +268,16 @@ return
 ClipboardChanged(DataType) {
     global g_sourceText, g_lastResult, g_lastErrors, g_textReady
     global g_done, g_typedText, g_exerciseNum, lbl_status, g_overlay
+    global g_lastClipboard, g_mode
 
     if (DataType != 1 || g_done || CheckDateChange())
         return
+    if g_mode != "practice" && g_mode != "daily_done"
+        return
+    if !IsSourceWindowActive() {
+        g_lastClipboard := A_Clipboard
+        return
+    }
 
     copied := Trim(A_Clipboard)
     if StrLen(copied) < 5
@@ -293,11 +295,15 @@ ClipboardChanged(DataType) {
     }
     cleaned := Trim(cleaned)
 
+    FlushPracticeLogs()
+    g_lastClipboard := A_Clipboard
+    QueuePracticeEvent("source", cleaned)
+    QueuePracticeReport("Zadání cvičení", cleaned)
     g_sourceText  := cleaned
     g_lastResult  := ""
     g_lastErrors  := -1
     g_textReady   := true
-    g_typedText   := ""    ; reset napsaného textu pro nové cvičení
+    ResetTypedInput()
 
     UpdateOverlay()
     UpdateTask()
@@ -323,33 +329,19 @@ PollClipboard(*) {
 ;  TIMERY
 ; ═══════════════════════════════════════════════════════════════
 WatchWindow(*) {
-    global g_done, g_postponedUntil, g_passwordOpen
-    if g_done
+    global g_done, g_mode, g_overlay
+    if g_done || g_mode != "practice"
         return
-    if g_passwordOpen
+    if IsObject(g_overlay) && WinActive("ahk_id " . g_overlay.Hwnd)
         return
-    if (g_postponedUntil > 0 && A_TickCount < g_postponedUntil)
+    try activeExe := ProcessGetName(WinGetPID("A"))
+    catch
+        activeExe := ""
+    if InStr(activeExe, "PowerToys") || InStr(activeExe, "Spotify")
+        || InStr(activeExe, "SnippingTool") || InStr(activeExe, "ScreenSketch")
         return
-    if !ProcessExist("MountBlue.exe") {
-        Run APP_PATH
-        Sleep 2000
-    }
-    hwnd := GetMainMountBlueWindow()
-    if hwnd {
-        try activeExe := ProcessGetName(WinGetPID("A"))
-        catch
-            activeExe := ""
-        if InStr(activeExe, "PowerToys") || InStr(activeExe, "Spotify")
-            || InStr(activeExe, "SnippingTool") || InStr(activeExe, "ScreenSketch")
-            return
-        ; Pokud je aktivní okno JINÉ okno MountBlue (popup) → nech ho být
-        activeHwnd := WinExist("A")
-        try activeExeName := ProcessGetName(WinGetPID("ahk_id " activeHwnd))
-        catch
-            activeExeName := ""
-        if (activeHwnd != hwnd) && (activeExeName != "MountBlue.exe")
-            ActivateMountBlue(3)
-    }
+    if activeExe != "MountBlue.exe" && !ActivateMountBlue(1)
+        ShowStartupFailure()
 }
 
 ; ═══════════════════════════════════════════════════════════════
@@ -357,7 +349,7 @@ WatchWindow(*) {
 ; ═══════════════════════════════════════════════════════════════
 
 ; Ctrl+Enter = vyhodnoť
-#HotIf g_started && !g_done
+#HotIf IsPracticeInputActive()
 ~^Enter:: {
     EvaluateExercise()
 }
@@ -399,79 +391,12 @@ WatchWindow(*) {
     UpdateOverlay()
 }
 
-; Klávesy — přes HandleKey (malá i velká)
-a:: HandleKey("a")
-b:: HandleKey("b")
-c:: HandleKey("c")
-d:: HandleKey("d")
-e:: HandleKey("e")
-f:: HandleKey("f")
-g:: HandleKey("g")
-h:: HandleKey("h")
-i:: HandleKey("i")
-j:: HandleKey("j")
-k:: HandleKey("k")
-l:: HandleKey("l")
-m:: HandleKey("m")
-n:: HandleKey("n")
-o:: HandleKey("o")
-p:: HandleKey("p")
-q:: HandleKey("q")
-r:: HandleKey("r")
-s:: HandleKey("s")
-t:: HandleKey("t")
-u:: HandleKey("u")
-v:: HandleKey("v")
-w:: HandleKey("w")
-x:: HandleKey("x")
-y:: HandleKey("y")
-z:: HandleKey("z")
-+a:: HandleKey("A")
-+b:: HandleKey("B")
-+c:: HandleKey("C")
-+d:: HandleKey("D")
-+e:: HandleKey("E")
-+f:: HandleKey("F")
-+g:: HandleKey("G")
-+h:: HandleKey("H")
-+i:: HandleKey("I")
-+j:: HandleKey("J")
-+k:: HandleKey("K")
-+l:: HandleKey("L")
-+m:: HandleKey("M")
-+n:: HandleKey("N")
-+o:: HandleKey("O")
-+p:: HandleKey("P")
-+q:: HandleKey("Q")
-+r:: HandleKey("R")
-+s:: HandleKey("S")
-+t:: HandleKey("T")
-+u:: HandleKey("U")
-+v:: HandleKey("V")
-+w:: HandleKey("W")
-+x:: HandleKey("X")
-+y:: HandleKey("Y")
-+z:: HandleKey("Z")
-0:: HandleKey("0")
-1:: HandleKey("1")
-2:: HandleKey("2")
-3:: HandleKey("3")
-4:: HandleKey("4")
-5:: HandleKey("5")
-6:: HandleKey("6")
-7:: HandleKey("7")
-8:: HandleKey("8")
-9:: HandleKey("9")
-Space::     HandleKey(" ")
-,::         HandleKey(",")
-.::         HandleKey(".")
--::         HandleKey("-")
-`;::        HandleKey(";")
-BackSpace:: HandleKeyBS()
+~^v:: RecordPracticePaste()
+~+Insert:: RecordPracticePaste()
 #HotIf
 
 ; Blokování systémových zkratek
-#HotIf g_started && !g_done
+#HotIf g_locked && !g_done && g_mode = "practice"
     !F4::     return
     ^Escape:: return
     #d::      return
@@ -488,6 +413,7 @@ BackSpace:: HandleKeyBS()
 #HotIf g_started && !g_done
 ^Delete:: {
     global g_deleteCount, g_deleteLocked, g_overlay, lbl_status
+    global g_mode, g_passwordOpen
 
     ; Uz zamceno — tiše ignoruj
     if g_deleteLocked
@@ -504,6 +430,9 @@ BackSpace:: HandleKeyBS()
     }
 
     zbyvaPokusu := 10 - g_deleteCount
+    previousMode := g_mode
+    g_passwordOpen := true
+    SetPracticeMode("password")
     ; Zastav timery aby nepřepisovaly focus
     SetTimer WatchWindow,  0
     BlockInput "Off"
@@ -524,7 +453,9 @@ BackSpace:: HandleKeyBS()
 
     ; Timeout nebo spatne heslo — obnov vse a restartuj timery
     Suspend false
-    BlockInput "On"
+    g_passwordOpen := false
+    SetPracticeMode(previousMode)
+    LockInput(previousMode = "practice")
     SetTimer WatchWindow,  1000
 
     if g_deleteCount >= 10 {
@@ -556,11 +487,14 @@ $Pause:: {
 #SuspendExempt False
 
 #HotIf
-#HotIf (g_started && !g_done && g_textReady)
+#HotIf (IsPracticeInputActive() && g_textReady)
 ~LButton:: {
     global g_typedText, g_lastResult, g_lastErrors
     ; Krátká pauza aby aplikace zpracovala klik
     Sleep 80
+    MouseGetPos , , &clickedWindow
+    if clickedWindow != GetMainMountBlueWindow()
+        return
     ; Kontroluj jen pokud uzivatel neco napsal
     if StrLen(g_typedText) = 0
         return
@@ -572,41 +506,19 @@ $Pause:: {
 ;  HANDLEKEY — sleduje co píšeš + blokování
 ; ═══════════════════════════════════════════════════════════════
 HandleKey(letter) {
-    global g_textReady, g_awaitLetter, g_filterMode, g_filterLetter
-    global g_typedText, lbl_typed, lbl_status, g_overlay
-
-    ; F3/F4 čeká na písmeno
+    global g_awaitLetter, g_filterMode, g_filterLetter
     if g_awaitLetter != "" {
-        g_filterMode   := g_awaitLetter
+        g_filterMode := g_awaitLetter
         g_filterLetter := letter
-        g_awaitLetter  := ""
+        g_awaitLetter := ""
         UpdateOverlay()
         return
     }
-
-    ; Blokuj dokud není text
-    if !g_textReady {
-        if IsObject(g_overlay)
-            lbl_status.Value := "⚠  Nejdriv Shift+Win+T → oznac zadany text!"
-        return
-    }
-
-    ; Přidej do sledovaného textu
-    g_typedText .= letter
-    UpdateTypedPreview()
-
-    ; Propusť do aplikace (SendEvent obchází AHK hotkey loop)
-    SendEvent "{Blind}" . letter
+    RecordPracticeText(letter)
 }
 
 HandleKeyBS() {
-    global g_textReady, g_typedText
-    if !g_textReady
-        return
-    if StrLen(g_typedText) > 0
-        g_typedText := SubStr(g_typedText, 1, StrLen(g_typedText) - 1)
-    UpdateTypedPreview()
-    SendEvent "{BackSpace}"
+    RecordPracticeEdit(0, 8, 0)
 }
 
 UpdateTypedPreview() {
@@ -826,10 +738,10 @@ EvaluateExerciseInput() {
 
     expected := BuildExpected(g_sourceText)
     ; Spotrebuj odevzdany text pred vyhodnocenim, aby opozdeny klik neudelil body znovu.
-    g_typedText := ""
-    UpdateTypedPreview()
+    ResetTypedInput()
     g_lastErrors := CountWordErrors(typedText, expected)
     g_lastCorrectChars := CountCorrectChars(typedText, expected)
+    LogSubmission(typedText, expected, g_lastCorrectChars, g_lastErrors)
     g_charsAccumulated += g_lastCorrectChars
 
     ; Týdenní cíl se přičítá při KAŽDÉM přičtení znaků, bez ohledu na denní cíl
@@ -864,8 +776,6 @@ EvaluateExerciseInput() {
 
     if confirmNeeded {
         SaveState()
-        BlockInput "Off"
-        Suspend true
         UpdateOverlay()
         UpdateTask()
 
@@ -890,6 +800,9 @@ DoPostpone() {
     g_postponeCount++
     msDelay := POSTPONE_MIN * 60 * 1000
     g_postponedUntil := A_TickCount + msDelay
+    QueuePracticeEvent("postpone", "", String(g_postponeCount))
+    FlushPracticeLogs()
+    SetPracticeMode("postponed")
     ; Zastav hlidani okna po dobu odlozeni.
     SetTimer WatchWindow,  0
     ; Odblokuj vstup
@@ -912,14 +825,11 @@ ShowOverlayAgain() {
     SetTimer WatchWindow,  1000
     ; Znovu zamkni
     Suspend false
-    BlockInput "On"
     if IsObject(g_overlay) {
         g_overlay.Show("NoActivate")
         UpdateOverlay()
     }
-    hwnd := WinExist("ahk_exe MountBlue.exe")
-    if hwnd
-        ActivateMountBlue(4)
+    TryStartPractice()
     SaveState()
 }
 
@@ -949,19 +859,19 @@ CreateOverlay() {
     screenW  := SysGet(78)
     screenH  := SysGet(79)
 
-    g_overlay           := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale", "MBEnforcer")
+    g_overlay           := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale", "MBEnforcer")
     g_overlay.BackColor := "0A0B1A"
     g_overlay.MarginX   := 0
     g_overlay.MarginY   := 0
-    g_overlay.Show("x" . (screenW - OVERLAY_W) . " y0 w" . OVERLAY_W . " h" . screenH . " NoActivate")
-
     BuildOverlayUI(OVERLAY_W, screenH)
     UpdateOverlay()
     UpdateTask()
+    OnMessage(0x201, UnlockMouseDown)
+    g_overlay.Show("x" . (screenW - OVERLAY_W) . " y0 w" . OVERLAY_W . " h" . screenH . " NoActivate")
 }
 
 BuildOverlayUI(w, h) {
-    global g_overlay
+    global g_overlay, MIN_TEXT_LEN
     global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
     global lbl_confirm, btn_confirm_yes, btn_confirm_no
     global lbl_weekly
@@ -1015,10 +925,10 @@ BuildOverlayUI(w, h) {
     y += gapLabel + 8
 
     g_overlay.SetFont("s10 w700 c" . cYellow, "Segoe UI")
-    lbl_task := g_overlay.Add("Text", "x" . ipad . " y" . y . " w" . ilw, "Cvičení 1  ·  0 / 250 znaků")
+    lbl_task := g_overlay.Add("Text", "x" . ipad . " y" . y . " w" . ilw, "Cvičení 1  ·  0 / " . MIN_TEXT_LEN . " znaků")
     y += 22
 
-    g_overlay.Add("Progress", "x" . ipad . " y" . y . " w" . ilw . " h6 Background" . cProg . " c" . cGreen . " Range0-250 -Smooth vPROG_BAR", 0)
+    g_overlay.Add("Progress", "x" . ipad . " y" . y . " w" . ilw . " h6 Background" . cProg . " c" . cGreen . " Range0-" . MIN_TEXT_LEN . " -Smooth vPROG_BAR", 0)
     y += gapAfter + 8
 
     ; ─── TÝDENNÍ CÍL (stejný styl, modrý) ───────────────
@@ -1170,6 +1080,8 @@ BuildOverlayUI(w, h) {
 ; Globální Gui okna pro barevná tlačítka (inicializovány nahoře)
 
 ShowConfirm(msg) {
+    SetPracticeMode("confirm")
+    LockInput(false)
     global lbl_confirm, btn_confirm_yes, btn_confirm_no
     global lbl_weekly
     global g_overlay, g_btnYesGui, g_btnNoGui, g_btnYesBorder, g_btnNoBorder, OVERLAY_W
@@ -1267,6 +1179,9 @@ ShowConfirm(msg) {
 
 ; ─── Tlačítko ODEMKNOUT — stejný design jako confirm, ale modré a větší ─
 ShowUnlockButton() {
+    SetPracticeMode("daily_done")
+    LockInput(false)
+    HideConfirm()
     global g_overlay, g_btnUnlockGui, g_btnUnlockBorder, OVERLAY_W
     global g_weeklyChars, g_weeklyDays, g_weeklyDone, WEEKLY_GOAL, lbl_status
 
@@ -1345,19 +1260,20 @@ ShowUnlockButton() {
 }
 
 DoUnlock() {
-    global g_overlay, g_btnUnlockGui, g_btnUnlockBorder
-    if CheckDateChange() || IsWeeklyRequired()
+    global g_done, g_mode, g_overlay, g_btnUnlockGui, g_btnUnlockBorder
+    if g_mode = "closing" || CheckDateChange() || IsWeeklyRequired()
         return
-    ; Odblokuj vstup PŘED ukončením — jinak Windows zůstane zamčený
-    try BlockInput "Off"
-    try Suspend false
-    if IsObject(g_btnUnlockBorder) {
-        g_btnUnlockBorder.Destroy()
-        g_btnUnlockBorder := 0
-    }
+    SetPracticeMode("closing")
+    g_done := true
+    SetTimer WatchWindow, 0
+    LockInput(false)
     if IsObject(g_btnUnlockGui) {
         g_btnUnlockGui.Destroy()
         g_btnUnlockGui := 0
+    }
+    if IsObject(g_btnUnlockBorder) {
+        g_btnUnlockBorder.Destroy()
+        g_btnUnlockBorder := 0
     }
     if IsObject(g_overlay)
         g_overlay.Destroy()
@@ -1387,33 +1303,43 @@ HideConfirm() {
 }
 
 ConfirmYes() {
-    global g_sourceText, g_typedText, g_textReady, g_filterMode, g_filterLetter, g_filterRepeat, g_awaitLetter
+    global g_sourceText, g_textReady, g_filterMode, g_filterLetter, g_filterRepeat, g_awaitLetter, g_dailyDone
+    QueuePracticeEvent("confirm", "", "yes")
     HideConfirm()
-    BlockInput "On"
-    Suspend false
-    g_sourceText   := ""
-    g_typedText    := ""
-    g_textReady    := false
-    g_filterMode   := ""
+    ResetTypedInput()
+    g_sourceText := ""
+    g_textReady := false
+    g_filterMode := ""
     g_filterLetter := ""
     g_filterRepeat := 1
-    g_awaitLetter  := ""
-    UpdateTypedPreview()
+    g_awaitLetter := ""
+    SetPracticeMode(g_dailyDone ? "daily_done" : "practice")
     SaveState()
     UpdateOverlay()
     UpdateTask()
+    if g_dailyDone
+        ShowUnlockButton()
+    else {
+        ActivateMountBlue(2)
+        LockInput(true)
+    }
 }
 
 ConfirmNo() {
-    global g_typedText
+    global g_dailyDone
+    QueuePracticeEvent("confirm", "", "no")
     HideConfirm()
-    BlockInput "On"
-    Suspend false
-    g_typedText := ""
-    UpdateTypedPreview()
+    ResetTypedInput()
+    SetPracticeMode(g_dailyDone ? "daily_done" : "practice")
     SaveState()
     UpdateOverlay()
     UpdateTask()
+    if g_dailyDone
+        ShowUnlockButton()
+    else {
+        ActivateMountBlue(2)
+        LockInput(true)
+    }
 }
 
 Sep(x, y, w) {
@@ -1458,6 +1384,7 @@ UpdateOverlay(statusOverride := "") {
 
     if !IsObject(g_overlay)
         return
+    LogFilterState()
 
     ; ── Zadaný text ──
     if g_sourceText = "" {
@@ -1558,16 +1485,9 @@ UpdateOverlay(statusOverride := "") {
 ; ═══════════════════════════════════════════════════════════════
 LockInput(state) {
     global g_locked, START_HOUR
-    if state {
-        ; Nikdy nezamykej před START_HOUR
-        if Integer(FormatTime(, "H")) < START_HOUR
-            return
-        g_locked := true
-        BlockInput "On"
-    } else {
-        g_locked := false
-        BlockInput "Off"
-    }
+    ; Text a tlacitka zustavaji ovladatelne i pri spusteni jako spravce.
+    BlockInput "Off"
+    g_locked := state && Integer(FormatTime(, "H")) >= START_HOUR
 }
 
 SetDayFiles(now := "") {
@@ -1635,30 +1555,28 @@ ActivateMountBlue(maxTries := 5) {
     global APP_PATH
     if !ProcessExist("MountBlue.exe") {
         try Run APP_PATH
-        Sleep 1000
+        catch
+            return false
     }
-    hwnd := 0
     loop maxTries {
         hwnd := GetMainMountBlueWindow()
         if !hwnd {
-            Sleep 500
+            Sleep 400
             continue
         }
-        try WinRestore "ahk_id " hwnd
-        try WinActivate "ahk_id " hwnd
-        try DllCall("SetForegroundWindow", "ptr", hwnd)
-        Sleep 250
-        ; Maximalizuj POUZE pokud okno není už maximalizované
-        ; a pouze hlavní okno (popupy jsou menší, GetMainMountBlueWindow je nevrátí)
         try {
-            if WinGetMinMax("ahk_id " hwnd) != 1
-                WinMaximize "ahk_id " hwnd
+            if WinGetMinMax("ahk_id " . hwnd) = -1
+                WinRestore "ahk_id " . hwnd
+            WinActivate "ahk_id " . hwnd
+            if WinWaitActive("ahk_id " . hwnd,, 0.5) {
+                if WinGetMinMax("ahk_id " . hwnd) != 1
+                    WinMaximize "ahk_id " . hwnd
+                return true
+            }
         }
-        if WinActive("ahk_id " hwnd)
-            return true
-        Sleep 350
+        Sleep 200
     }
-    return hwnd != 0
+    return false
 }
 
 ; Sedm treninkovych dnu; nedokoncene dny zachovaji znaky i poradi dne.
@@ -1834,4 +1752,467 @@ Finish(typedText := "") {
         DoUnlock()
     else
         ShowUnlockButton()
+}
+
+HasArgument(value) {
+    for argument in A_Args
+        if argument = value
+            return true
+    return false
+}
+
+NewIdentifier() {
+    guid := Buffer(16)
+    if DllCall("ole32\CoCreateGuid", "ptr", guid, "int") != 0
+        throw Error("Nelze vytvorit identifikator instalace.")
+    text := Buffer(78)
+    DllCall("ole32\StringFromGUID2", "ptr", guid, "ptr", text, "int", 39)
+    return StrLower(Trim(StrGet(text), "{}"))
+}
+
+GetDeviceBinding() {
+    token := 0, sidText := 0
+    try {
+        if !DllCall("advapi32\OpenProcessToken", "ptr", DllCall("GetCurrentProcess", "ptr"), "uint", 8, "ptr*", &token)
+            throw OSError()
+        size := 0
+        DllCall("advapi32\GetTokenInformation", "ptr", token, "int", 1, "ptr", 0, "uint", 0, "uint*", &size)
+        data := Buffer(size)
+        if !DllCall("advapi32\GetTokenInformation", "ptr", token, "int", 1, "ptr", data, "uint", size, "uint*", &size)
+            throw OSError()
+        if !DllCall("advapi32\ConvertSidToStringSidW", "ptr", NumGet(data, 0, "ptr"), "ptr*", &sidText)
+            throw OSError()
+        userId := StrGet(sidText)
+    } finally {
+        if sidText
+            DllCall("LocalFree", "ptr", sidText)
+        if token
+            DllCall("CloseHandle", "ptr", token)
+    }
+    try machine := RegRead("HKLM\SOFTWARE\Microsoft\Cryptography", "MachineGuid")
+    catch
+        machine := A_ComputerName
+    return machine . "|" . userId
+}
+
+ApplyProfileLimits(role) {
+    global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, MIN_TEXT_LEN, WEEKLY_GOAL
+    MIN_TEXT_LEN := role = "brother" ? BROTHER_DAILY_GOAL : DEFAULT_DAILY_GOAL
+    WEEKLY_GOAL := MIN_TEXT_LEN * 10
+}
+
+InitDeviceConfig() {
+    global DONE_DIR, g_device
+    if !DirExist(DONE_DIR)
+        DirCreate DONE_DIR
+    path := DONE_DIR . "\device.ini"
+    binding := GetDeviceBinding()
+    savedBinding := IniRead(path, "Device", "Binding", "")
+    role := IniRead(path, "Device", "Role", "normal")
+    id := IniRead(path, "Device", "Id", "")
+    folder := IniRead(path, "Device", "SharedFolder", "")
+    if savedBinding != binding || !RegExMatch(id, "^[a-fA-F0-9-]{36}$") {
+        id := NewIdentifier(), role := "normal", folder := ""
+    }
+    if role != "brother"
+        role := "normal"
+    g_device := Map("path", path, "binding", binding, "id", id, "role", role, "folder", folder)
+    SaveDeviceConfig(role, folder)
+    ApplyProfileLimits(role)
+}
+
+SaveDeviceConfig(role, folder) {
+    global g_device
+    path := g_device["path"] . ".tmp"
+    IniWrite g_device["id"], path, "Device", "Id"
+    IniWrite g_device["binding"], path, "Device", "Binding"
+    IniWrite role, path, "Device", "Role"
+    IniWrite folder, path, "Device", "SharedFolder"
+    FileMove path, g_device["path"], true
+    g_device["role"] := role
+    g_device["folder"] := folder
+}
+
+ShowDeviceSetup() {
+    password := InputBox("Heslo správce nastavení:", "Nastavení Mount Blue", "Password w320 h130")
+    if password.Result != "OK" || password.Value != "953"
+        ExitApp
+    RenderDeviceSetup()
+}
+
+RenderDeviceSetup() {
+    global g_device
+    setup := Gui("+AlwaysOnTop", "Nastavení Mount Blue")
+    setup.SetFont("s10", "Segoe UI")
+    setup.AddText("w470", "Profil tohoto účtu na tomto PC")
+    brother := setup.AddCheckbox("w470", "Tento účet a počítač patří bratrovi")
+    brother.Value := g_device["role"] = "brother"
+    setup.AddText("w470 y+18", "Sdílená složka záznamů (volitelné)")
+    folder := setup.AddEdit("w370 ReadOnly", g_device["folder"])
+    browse := setup.AddButton("x+8 w92", "Vybrat…")
+    browse.OnEvent("Click", (*) => PickSharedFolder(folder))
+    clear := setup.AddButton("xm w130", "Vypnout sdílení")
+    clear.OnEvent("Click", (*) => folder.Value := "")
+    setup.AddText("xm y+16 w470", "Záznamy obsahují text a opravy pouze z cvičení MountBlue. Vybraná složka musí být sdílená s příjemcem.")
+    setup.AddText("w470 c666666", "ID instalace: " . g_device["id"])
+    save := setup.AddButton("xm y+18 w160 Default", "Uložit a spustit")
+    save.OnEvent("Click", (*) => CommitDeviceSetup(brother.Value, folder.Value))
+    cancel := setup.AddButton("x+12 w110", "Zavřít")
+    cancel.OnEvent("Click", (*) => ExitApp())
+    setup.OnEvent("Close", (*) => ExitApp())
+    setup.Show("AutoSize")
+}
+
+PickSharedFolder(control) {
+    selected := DirSelect(control.Value, 3, "Vyber sdílenou složku ve svém OneDrivu")
+    if selected != ""
+        control.Value := selected
+}
+
+CommitDeviceSetup(isBrother, folder) {
+    if folder != "" && !DirExist(folder) {
+        MsgBox "Vybraná složka neexistuje.", "Nastavení"
+        return
+    }
+    SaveDeviceConfig(isBrother ? "brother" : "normal", folder)
+    Run '"' . A_AhkPath . '" "' . A_ScriptFullPath . '"'
+    ExitApp
+}
+
+InitPracticeLogs() {
+    global DONE_DIR, g_device, g_log, MIN_TEXT_LEN, WEEKLY_GOAL
+    root := DONE_DIR . "\logs\" . g_device["id"]
+    day := FormatTime(, "yyyy-MM-dd")
+    dir := root . "\" . day
+    DirCreate dir
+    name := FormatTime(, "HHmmss") . "_" . NewIdentifier()
+    g_log := Map("root", root, "base", dir . "\" . name, "events", "", "report", "", "trace", "", "draft", "", "revision", 0, "status", "Záznamy: místně")
+    QueuePracticeEvent("session", "", "profile=" . g_device["role"] . ";daily=" . MIN_TEXT_LEN . ";weekly=" . WEEKLY_GOAL)
+    QueuePracticeReport("Nové sezení", "Profil: " . g_device["role"] . "`nDenní cíl: " . MIN_TEXT_LEN . "`nTýdenní cíl: " . WEEKLY_GOAL . "`nID instalace: " . g_device["id"])
+}
+
+LogReady() {
+    global g_log
+    return IsSet(g_log) && IsObject(g_log) && g_log.Has("base")
+}
+
+JsonQuote(value) {
+    result := Chr(34)
+    loop Parse String(value) {
+        code := Ord(A_LoopField)
+        if code = 34 || code = 92
+            result .= Chr(92) . A_LoopField
+        else if code < 32
+            result .= Chr(92) . "u" . Format("{:04x}", code)
+        else
+            result .= A_LoopField
+    }
+    return result . Chr(34)
+}
+
+QueuePracticeEvent(kind, text := "", detail := "") {
+    global g_log
+    if !LogReady()
+        return
+    at := FormatTime(, "yyyy-MM-dd HH:mm:ss") . "." . Format("{:03}", A_MSec)
+    g_log["events"] .= '{"at":' . JsonQuote(at) . ',"event":' . JsonQuote(kind) . ',"text":' . JsonQuote(text) . ',"detail":' . JsonQuote(detail) . "}`n"
+}
+
+QueuePracticeReport(title, text) {
+    global g_log
+    if LogReady()
+        g_log["report"] .= "`n[" . FormatTime(, "HH:mm:ss") . "] " . title . "`n" . text . "`n"
+}
+
+QueuePracticeTrace(text) {
+    global g_log
+    if LogReady()
+        g_log["trace"] .= text
+}
+
+LogSubmission(text, expected, correct, errors) {
+    global g_log
+    QueuePracticeEvent("submit", text, "correct=" . correct . ";wordErrors=" . errors)
+    QueuePracticeEvent("expected", expected)
+    QueuePracticeReport("Odevzdané cvičení", "Očekávaný text:`n" . expected . "`n`nNapsaný text:`n" . text . "`n`nSprávné znaky: " . correct . "; chybná slova: " . errors)
+    if LogReady()
+        g_log["draft"] := ""
+    FlushPracticeLogs()
+}
+
+FlushPracticeLogs(*) {
+    global g_log, g_typedText
+    if !LogReady()
+        return
+    previousCritical := A_IsCritical
+    Critical "On"
+    try {
+        if g_log["trace"] != "" {
+            QueuePracticeReport("Průběh psaní a oprav", g_log["trace"])
+            g_log["trace"] := ""
+        }
+        if g_typedText != "" && g_typedText != g_log["draft"] {
+            QueuePracticeEvent("draft", g_typedText)
+            QueuePracticeReport("Rozpracovaný text", g_typedText)
+            g_log["draft"] := g_typedText
+        }
+        changed := false
+        for key, extension in Map("events", ".jsonl", "report", ".txt") {
+            if g_log[key] = ""
+                continue
+            FileAppend g_log[key], g_log["base"] . extension, "UTF-8"
+            g_log[key] := ""
+            changed := true
+        }
+        if changed {
+            g_log["revision"]++
+            WriteStateFile(g_log["base"] . ".pending", String(g_log["revision"]))
+        }
+    } catch {
+        g_log["status"] := "Záznamy: chyba místního uložení"
+    } finally {
+        Critical previousCritical
+    }
+}
+
+SyncSharedLogs(*) {
+    global g_device, g_log
+    if !LogReady() || g_device["folder"] = ""
+        return
+    if !DirExist(g_device["folder"]) {
+        g_log["status"] := "Záznamy: čekají na sdílenou složku"
+        return
+    }
+    try {
+        loop Files g_log["root"] . "\*.pending", "R" {
+            marker := A_LoopFileFullPath
+            revision := FileRead(marker)
+            base := SubStr(marker, 1, -8)
+            SplitPath base, &fileName, &dayFolder
+            SplitPath dayFolder, &day
+            destination := g_device["folder"] . "\" . g_device["id"] . "\" . day . "\" . fileName
+            SplitPath destination,, &directory
+            DirCreate directory
+            for extension in [".txt", ".jsonl"] {
+                if !FileExist(base . extension)
+                    continue
+                FileCopy base . extension, destination . extension . ".tmp", true
+                FileMove destination . extension . ".tmp", destination . extension, true
+            }
+            if FileRead(marker) = revision
+                FileDelete marker
+        }
+        g_log["status"] := "Záznamy: předány sdílené složce"
+    } catch Error as err {
+        g_log["error"] := err.Message
+        g_log["status"] := "Záznamy: čekají na synchronizaci"
+    }
+}
+
+PracticeExit(reason, code) {
+    try SaveState()
+    try SaveWeeklyState()
+    try QueuePracticeEvent("session_end", "", reason)
+    try FlushPracticeLogs()
+    try SyncSharedLogs()
+    try BlockInput "Off"
+    return 0
+}
+
+SetPracticeMode(mode) {
+    global g_mode, g_inputHook
+    g_mode := mode
+    QueuePracticeEvent("mode", "", mode)
+    if IsSet(g_inputHook) && IsObject(g_inputHook) {
+        if mode = "practice" || mode = "daily_done" {
+            if !g_inputHook.InProgress
+                g_inputHook.Start()
+        } else if g_inputHook.InProgress
+            g_inputHook.Stop()
+    }
+}
+
+TryStartPractice() {
+    global g_retryGui, g_lastClipboard, g_dailyDone
+    SetPracticeMode("starting")
+    LockInput(false)
+    if !ActivateMountBlue(12) {
+        ShowStartupFailure()
+        return
+    }
+    try A_Clipboard := ""
+    g_lastClipboard := A_Clipboard
+    OnClipboardChange ClipboardChanged
+    if IsObject(g_retryGui)
+        g_retryGui.Hide()
+    SetPracticeMode(g_dailyDone && !IsWeeklyRequired() ? "daily_done" : "practice")
+    UpdateOverlay()
+    UpdateTask()
+    if g_dailyDone && !IsWeeklyRequired()
+        ShowUnlockButton()
+    else
+        LockInput(true)
+}
+
+ShowStartupFailure() {
+    global lbl_status, g_overlay, g_retryGui
+    SetPracticeMode("retry")
+    LockInput(false)
+    HideConfirm()
+    lbl_status.Value := "MountBlue není připravené. Zkus otevření znovu."
+    if !IsObject(g_retryGui) {
+        g_retryGui := Gui("+AlwaysOnTop", "MountBlue")
+        g_retryGui.SetFont("s10", "Segoe UI")
+        g_retryGui.AddText("w360", "MountBlue se nepodařilo otevřít. Ovládání PC zůstává dostupné.")
+        retry := g_retryGui.AddButton("w220 h32", "Zkusit otevření znovu")
+        retry.OnEvent("Click", (*) => TryStartPractice())
+        g_retryGui.OnEvent("Close", (*) => g_retryGui.Hide())
+    }
+    g_retryGui.Show("AutoSize")
+}
+
+UnlockMouseDown(wParam, lParam, msg, hwnd) {
+    global g_btnUnlockGui, g_btnUnlockBorder, g_mode
+    if g_mode = "closing"
+        return
+    root := DllCall("GetAncestor", "ptr", hwnd, "uint", 2, "ptr")
+    if (IsObject(g_btnUnlockGui) && root = g_btnUnlockGui.Hwnd)
+        || (IsObject(g_btnUnlockBorder) && root = g_btnUnlockBorder.Hwnd) {
+        SetTimer DoUnlock, -1
+        return 1
+    }
+}
+
+IsPracticeInputActive() {
+    global g_started, g_done, g_mode, g_passwordOpen, g_postponedUntil
+    if !g_started || g_done || g_passwordOpen || g_postponedUntil != 0
+        || (g_mode != "practice" && g_mode != "daily_done")
+        return false
+    active := WinActive("ahk_exe MountBlue.exe")
+    if !active || active != GetMainMountBlueWindow()
+        return false
+    try {
+        focused := ControlGetFocus("ahk_id " . active)
+        if focused != "" && IsPasswordControl(ControlGetHwnd(focused, "ahk_id " . active))
+            return false
+    }
+    return true
+}
+
+IsPasswordControl(hwnd) {
+    return InStr(WinGetClass("ahk_id " . hwnd), "Edit") && (WinGetStyle("ahk_id " . hwnd) & 0x20)
+}
+
+IsSourceWindowActive() {
+    if IsPracticeInputActive()
+        return true
+    try name := ProcessGetName(WinGetPID("A"))
+    catch
+        return false
+    return InStr(name, "PowerToys") || InStr(name, "SnippingTool") || InStr(name, "ScreenSketch")
+}
+
+StartPracticeInput() {
+    global g_inputHook
+    g_inputHook := InputHook("V L0 I1")
+    g_inputHook.OnChar := PracticeChar
+    g_inputHook.NotifyNonText := true
+    g_inputHook.KeyOpt("{Backspace}{Delete}{Left}{Right}{Home}{End}", "N")
+    g_inputHook.OnKeyDown := RecordPracticeEdit
+}
+
+PracticeChar(hook, text) {
+    global g_awaitLetter
+    if !IsPracticeInputActive()
+        return
+    if (text = "2" && GetKeyState("Numpad2", "P")) || (text = "3" && GetKeyState("Numpad3", "P"))
+        return
+    if g_awaitLetter != "" {
+        HandleKey(SubStr(text, 1, 1))
+        return
+    }
+    RecordPracticeText(text)
+}
+
+ResetTypedInput() {
+    global g_typedText, g_caret, g_anchor
+    g_typedText := ""
+    g_caret := 0
+    g_anchor := 0
+    UpdateTypedPreview()
+}
+
+RecordPracticeText(text, kind := "insert") {
+    global g_typedText, g_caret, g_anchor
+    g_caret := Min(StrLen(g_typedText), Max(0, g_caret))
+    g_anchor := Min(StrLen(g_typedText), Max(0, g_anchor))
+    left := Min(g_caret, g_anchor), right := Max(g_caret, g_anchor)
+    g_typedText := SubStr(g_typedText, 1, left) . text . SubStr(g_typedText, right + 1)
+    g_caret := left + StrLen(text)
+    g_anchor := g_caret
+    QueuePracticeEvent(kind, text, "position=" . left . ";replaced=" . (right-left))
+    QueuePracticeTrace(kind = "paste" ? "<Vloženo: " . text . ">" : text)
+    UpdateTypedPreview()
+}
+
+RecordPracticePaste() {
+    if IsPracticeInputActive()
+        RecordPracticeText(A_Clipboard, "paste")
+}
+
+RecordPracticeEdit(hook, vk, sc) {
+    if !IsPracticeInputActive()
+        return
+    EditPracticeBuffer(vk, GetKeyState("Ctrl", "P"), GetKeyState("Shift", "P"))
+}
+
+EditPracticeBuffer(vk, ctrl := false, shift := false) {
+    global g_typedText, g_caret, g_anchor
+    if vk = 0x41 && ctrl {
+        g_anchor := 0, g_caret := StrLen(g_typedText)
+        QueuePracticeEvent("select_all")
+        QueuePracticeTrace("<Vybráno vše>")
+        return
+    }
+    if vk = 0x2E && ctrl
+        return
+    left := Min(g_caret, g_anchor), right := Max(g_caret, g_anchor)
+    if vk = 8 || vk = 0x2E {
+        if left = right {
+            if vk = 8 {
+                left := Max(0, left - 1)
+                if ctrl && RegExMatch(SubStr(g_typedText, 1, g_caret), "\S+\s*$", &word)
+                    left := word.Pos - 1
+            } else
+                right := Min(StrLen(g_typedText), right + 1)
+        }
+        removed := SubStr(g_typedText, left + 1, right - left)
+        g_typedText := SubStr(g_typedText, 1, left) . SubStr(g_typedText, right + 1)
+        g_caret := left, g_anchor := left
+        QueuePracticeEvent(vk = 8 ? "backspace" : "delete", removed, "position=" . left)
+        QueuePracticeTrace("<" . (vk = 8 ? "Backspace: " : "Delete: ") . removed . ">")
+        UpdateTypedPreview()
+    } else if vk = 0x25 || vk = 0x27 || vk = 0x24 || vk = 0x23 {
+        if vk = 0x24
+            g_caret := 0
+        else if vk = 0x23
+            g_caret := StrLen(g_typedText)
+        else
+            g_caret := Min(StrLen(g_typedText), Max(0, g_caret + (vk = 0x25 ? -1 : 1)))
+        if !shift
+            g_anchor := g_caret
+        QueuePracticeEvent("move", "", "caret=" . g_caret . ";anchor=" . g_anchor)
+        QueuePracticeTrace("<Pozice: " . g_caret . ">")
+    }
+}
+
+LogFilterState() {
+    global g_log, g_filterMode, g_filterLetter, g_filterRepeat
+    if !LogReady()
+        return
+    state := g_filterMode . ";letter=" . g_filterLetter . ";repeat=" . g_filterRepeat
+    if g_log.Has("filter") && g_log["filter"] = state
+        return
+    g_log["filter"] := state
+    QueuePracticeEvent("filter", "", state)
 }
