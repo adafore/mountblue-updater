@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 13   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 14   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -1801,6 +1801,42 @@ ApplyProfileLimits(role) {
     WEEKLY_GOAL := MIN_TEXT_LEN * 10
 }
 
+DeviceBindingFingerprint(binding) {
+    algorithm := 0
+    try {
+        if DllCall("bcrypt\BCryptOpenAlgorithmProvider", "ptr*", &algorithm, "wstr", "SHA256", "ptr", 0, "uint", 0, "int") != 0
+            return ""
+        binding := StrLower(Trim(binding))
+        data := Buffer(StrPut(binding, "UTF-8"))
+        size := StrPut(binding, data, "UTF-8") - 1
+        digest := Buffer(32)
+        if DllCall("bcrypt\BCryptHash", "ptr", algorithm, "ptr", 0, "uint", 0, "ptr", data, "uint", size, "ptr", digest, "uint", digest.Size, "int") != 0
+            return ""
+        result := ""
+        loop digest.Size
+            result .= Format("{:02x}", NumGet(digest, A_Index - 1, "uchar"))
+        return result
+    } catch {
+        return ""
+    } finally {
+        if algorithm
+            DllCall("bcrypt\BCryptCloseAlgorithmProvider", "ptr", algorithm, "uint", 0)
+    }
+}
+
+ApplyAutomaticDeviceConfig(device) {
+    if device.Get("autoSetup", "") = "brother-shared-v1"
+        return false
+    ; Match the actual Windows account and PC, not a copied installation ID.
+    if DeviceBindingFingerprint(device["binding"]) != "71f26e19ea7ad7287d02a67ffd21baa459a82252cb5ca70175ee215e32118ccc"
+        return false
+    device["role"] := "brother"
+    if device["folder"] = ""
+        device["folder"] := EnvGet("USERPROFILE") . "\OneDrive\Attachments\OneNote"
+    device["autoSetup"] := "brother-shared-v1"
+    return true
+}
+
 InitDeviceConfig() {
     global DONE_DIR, g_device
     if !DirExist(DONE_DIR)
@@ -1811,14 +1847,16 @@ InitDeviceConfig() {
     role := IniRead(path, "Device", "Role", "normal")
     id := IniRead(path, "Device", "Id", "")
     folder := IniRead(path, "Device", "SharedFolder", "")
+    autoSetup := IniRead(path, "Device", "AutomaticSetup", "")
     if savedBinding != binding || !RegExMatch(id, "^[a-fA-F0-9-]{36}$") {
-        id := NewIdentifier(), role := "normal", folder := ""
+        id := NewIdentifier(), role := "normal", folder := "", autoSetup := ""
     }
     if role != "brother"
         role := "normal"
-    g_device := Map("path", path, "binding", binding, "id", id, "role", role, "folder", folder)
-    SaveDeviceConfig(role, folder)
-    ApplyProfileLimits(role)
+    g_device := Map("path", path, "binding", binding, "id", id, "role", role, "folder", folder, "autoSetup", autoSetup)
+    ApplyAutomaticDeviceConfig(g_device)
+    SaveDeviceConfig(g_device["role"], g_device["folder"])
+    ApplyProfileLimits(g_device["role"])
 }
 
 SaveDeviceConfig(role, folder) {
@@ -1828,6 +1866,7 @@ SaveDeviceConfig(role, folder) {
     IniWrite g_device["binding"], path, "Device", "Binding"
     IniWrite role, path, "Device", "Role"
     IniWrite folder, path, "Device", "SharedFolder"
+    IniWrite g_device.Get("autoSetup", ""), path, "Device", "AutomaticSetup"
     FileMove path, g_device["path"], true
     g_device["role"] := role
     g_device["folder"] := folder

@@ -15,8 +15,10 @@ InitDeviceConfig()
 Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 3000, "paired brother profile has 300 daily and 3000 weekly")
 Assert(g_device["id"] = firstId && g_device["folder"] = shared, "updates preserve identity and selected folder")
 IniWrite "different-device", g_device["path"], "Device", "Binding"
+IniWrite "brother-shared-v1", g_device["path"], "Device", "AutomaticSetup"
 InitDeviceConfig()
 Assert(g_device["role"] = "normal" && g_device["id"] != firstId && g_device["folder"] = "", "copied settings cannot assign brother profile or sharing to another device")
+Assert(g_device["autoSetup"] = "", "copied settings discard the automatic setup marker")
 SaveDeviceConfig("brother", shared)
 DEFAULT_DAILY_GOAL := 275
 BROTHER_DAILY_GOAL := 325

@@ -11,7 +11,24 @@ do Moje soubory, pokud je tato moznost dostupna.
 Pro pristup pouze pres web staci opravneni ke cteni. Pridani zastupce
 muze vyzadovat opravneni k upravam. Verejny odkaz neni potreba.
 
-## 2. Jednorazove nastaveni na bratrove PC
+## 2. Automaticke nastaveni znameho bratrova PC
+
+Od verze 14 se znamy bratruv ucet a pocitac nastavi automaticky pri startu.
+Dostane profil bratra (300 znaku denne, 3000 tydne). Pokud dosud nebyla
+vybrana sdilena slozka, pouzije se `OneDrive\Attachments\OneNote` v jeho
+uzivatelske slozce Windows. Jiz vybrana slozka se neprepisuje.
+
+Pro parovani se pouziva SHA-256 otisk kombinace pocitace a uctu Windows.
+Puvodni identifikatory nejsou ve verejnem zdrojovem kodu. Ostatni pocitace
+a ucty zustanou beze zmeny, ani samotne zkopirovani ID instalace nestaci.
+ID instalace, rozepsany postup a dosavadni zaznamy zustanou zachovany.
+
+Automaticke nastaveni se provede pouze jednou. Pozdejsi rucni zmena profilu,
+slozky nebo vypnuti sdileni se pri dalsim startu nevrati zpet.
+Pokud slozka zatim neni dostupna, zaznamy cekaji mistne na jeji zpristupneni;
+program nevytvari nahradni slozku a nemeni opravneni OneDrivu.
+
+### Rucni nastaveni (jen pokud je potreba)
 
 1. Soubor `Nastaveni.cmd` umistete vedle aktualniho `PovinePsani.ahk`.
 2. Spustte `Nastaveni.cmd`. Zadejte heslo `953`.
