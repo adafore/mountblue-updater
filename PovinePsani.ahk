@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 14   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 15   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -203,6 +203,10 @@ global g_inputHook := 0
 global g_caret := 0
 global g_anchor := 0
 global g_retryGui := 0
+global g_activationFailure := ""
+global g_focusRetryCount := 0
+global g_watchWindowBusy := false
+global g_startAttemptBusy := false
 
 ; Overlay labely
 global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
@@ -329,8 +333,8 @@ PollClipboard(*) {
 ;  TIMERY
 ; ═══════════════════════════════════════════════════════════════
 WatchWindow(*) {
-    global g_done, g_mode, g_overlay
-    if g_done || g_mode != "practice"
+    global g_done, g_mode, g_overlay, g_activationFailure, g_focusRetryCount, g_watchWindowBusy
+    if g_done || g_mode != "practice" || g_watchWindowBusy
         return
     if IsObject(g_overlay) && WinActive("ahk_id " . g_overlay.Hwnd)
         return
@@ -340,8 +344,35 @@ WatchWindow(*) {
     if InStr(activeExe, "PowerToys") || InStr(activeExe, "Spotify")
         || InStr(activeExe, "SnippingTool") || InStr(activeExe, "ScreenSketch")
         return
-    if activeExe != "MountBlue.exe" && !ActivateMountBlue(1)
-        ShowStartupFailure()
+    if activeExe = "MountBlue.exe" {
+        if g_focusRetryCount
+            QueuePracticeEvent("focus_restored")
+        g_focusRetryCount := 0
+        LockInput(true)
+        return
+    }
+    g_watchWindowBusy := true
+    try {
+        activated := ActivateMountBlue(2)
+        if g_done || g_mode != "practice"
+            return
+        if activated {
+            if g_focusRetryCount
+                QueuePracticeEvent("focus_restored")
+            g_focusRetryCount := 0
+            LockInput(true)
+        } else if g_activationFailure = "focus_denied" {
+            ; A foreground restriction is not a failed application launch.
+            LockInput(false)
+            g_focusRetryCount++
+            if g_focusRetryCount = 1
+                QueuePracticeEvent("focus_retry", "", g_activationFailure)
+        } else {
+            ShowStartupFailure()
+        }
+    } finally {
+        g_watchWindowBusy := false
+    }
 }
 
 ; ═══════════════════════════════════════════════════════════════
@@ -1552,25 +1583,50 @@ GetMainMountBlueWindow() {
 
 ; ─── Aktivuje hlavní okno MountBlue, NIKDY nemaximalizuje popupy ─
 ActivateMountBlue(maxTries := 5) {
-    global APP_PATH
+    global APP_PATH, g_activationFailure, g_mode, g_done
+    g_activationFailure := ""
+    startingMode := g_mode
     if !ProcessExist("MountBlue.exe") {
-        try Run APP_PATH
-        catch
+        if !FileExist(APP_PATH) {
+            g_activationFailure := "missing_executable"
             return false
+        }
+        try Run APP_PATH
+        catch {
+            g_activationFailure := "launch_failed"
+            return false
+        }
     }
     loop maxTries {
+        if g_done || g_mode != startingMode {
+            g_activationFailure := "cancelled"
+            return false
+        }
         hwnd := GetMainMountBlueWindow()
         if !hwnd {
+            g_activationFailure := "window_missing"
             Sleep 400
             continue
         }
+        g_activationFailure := "focus_denied"
         try {
             if WinGetMinMax("ahk_id " . hwnd) = -1
                 WinRestore "ahk_id " . hwnd
             WinActivate "ahk_id " . hwnd
-            if WinWaitActive("ahk_id " . hwnd,, 0.5) {
-                if WinGetMinMax("ahk_id " . hwnd) != 1
-                    WinMaximize "ahk_id " . hwnd
+            WinWaitActive("ahk_id " . hwnd,, 0.5)
+            if g_done || g_mode != startingMode {
+                g_activationFailure := "cancelled"
+                return false
+            }
+            ; MountBlue may activate its own modal dialog instead of the main window.
+            if active := WinActive("ahk_exe MountBlue.exe") {
+                if active = hwnd {
+                    try {
+                        if WinGetMinMax("ahk_id " . hwnd) != 1
+                            WinMaximize "ahk_id " . hwnd
+                    }
+                }
+                g_activationFailure := ""
                 return true
             }
         }
@@ -2059,8 +2115,9 @@ PracticeExit(reason, code) {
 }
 
 SetPracticeMode(mode) {
-    global g_mode, g_inputHook
+    global g_mode, g_inputHook, g_focusRetryCount
     g_mode := mode
+    g_focusRetryCount := 0
     QueuePracticeEvent("mode", "", mode)
     if IsSet(g_inputHook) && IsObject(g_inputHook) {
         if mode = "practice" || mode = "daily_done" {
@@ -2072,29 +2129,55 @@ SetPracticeMode(mode) {
 }
 
 TryStartPractice() {
-    global g_retryGui, g_lastClipboard, g_dailyDone
-    SetPracticeMode("starting")
-    LockInput(false)
-    if !ActivateMountBlue(12) {
-        ShowStartupFailure()
+    global g_retryGui, g_lastClipboard, g_dailyDone, g_mode, g_done, g_startAttemptBusy
+    if g_startAttemptBusy
         return
+    g_startAttemptBusy := true
+    try {
+        SetPracticeMode("starting")
+        LockInput(false)
+        activated := ActivateMountBlue(12)
+        if g_done || g_mode != "starting"
+            return
+        if !activated {
+            ShowStartupFailure()
+            return
+        }
+        try A_Clipboard := ""
+        g_lastClipboard := A_Clipboard
+        OnClipboardChange ClipboardChanged
+        if IsObject(g_retryGui)
+            g_retryGui.Hide()
+        SetPracticeMode(g_dailyDone && !IsWeeklyRequired() ? "daily_done" : "practice")
+        UpdateOverlay()
+        UpdateTask()
+        if g_dailyDone && !IsWeeklyRequired()
+            ShowUnlockButton()
+        else
+            LockInput(true)
+    } finally {
+        g_startAttemptBusy := false
     }
-    try A_Clipboard := ""
-    g_lastClipboard := A_Clipboard
-    OnClipboardChange ClipboardChanged
-    if IsObject(g_retryGui)
-        g_retryGui.Hide()
-    SetPracticeMode(g_dailyDone && !IsWeeklyRequired() ? "daily_done" : "practice")
-    UpdateOverlay()
-    UpdateTask()
-    if g_dailyDone && !IsWeeklyRequired()
-        ShowUnlockButton()
-    else
-        LockInput(true)
+}
+
+StartupFailureMessage(reason) {
+    switch reason {
+        case "missing_executable":
+            return "Spouštěcí soubor MountBlue nebyl nalezen. Ověř, že je MountBlue nainstalované."
+        case "launch_failed":
+            return "Windows nedovolil spustit MountBlue. Zkus jej otevřít ručně."
+        case "window_missing":
+            return "MountBlue běží, ale jeho okno zatím není dostupné. Počkej na dokončení načítání a zkus to znovu."
+        case "focus_denied":
+            return "MountBlue je otevřené, ale nepodařilo se přepnout na jeho okno. Přepni do něj a zkus to znovu."
+        default:
+            return "MountBlue se nepodařilo otevřít. Zkus otevření znovu."
+    }
 }
 
 ShowStartupFailure() {
-    global lbl_status, g_overlay, g_retryGui
+    global lbl_status, g_overlay, g_retryGui, g_activationFailure
+    QueuePracticeEvent("startup_error", "", g_activationFailure)
     SetPracticeMode("retry")
     LockInput(false)
     HideConfirm()
@@ -2102,11 +2185,12 @@ ShowStartupFailure() {
     if !IsObject(g_retryGui) {
         g_retryGui := Gui("+AlwaysOnTop", "MountBlue")
         g_retryGui.SetFont("s10", "Segoe UI")
-        g_retryGui.AddText("w360", "MountBlue se nepodařilo otevřít. Ovládání PC zůstává dostupné.")
+        g_retryGui.AddText("w360 r6 vERROR_TEXT", "")
         retry := g_retryGui.AddButton("w220 h32", "Zkusit otevření znovu")
         retry.OnEvent("Click", (*) => TryStartPractice())
         g_retryGui.OnEvent("Close", (*) => g_retryGui.Hide())
     }
+    g_retryGui["ERROR_TEXT"].Value := StartupFailureMessage(g_activationFailure) . "`n`nOvládání PC zůstává dostupné."
     g_retryGui.Show("AutoSize")
 }
 

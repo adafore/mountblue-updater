@@ -74,4 +74,11 @@ Kliknuti na Odemknout funguje pres celou plochu i okraj tlacitka.
 Hlidac pri potvrzovani a odemykani neprepina focus zpet do MountBlue.
 Vstup se pri startu neblokuje, dokud MountBlue neni skutecne aktivni.
 Pri neuspesnem otevreni se nabidne opakovani a PC zustava ovladatelne.
+Od verze 15 se docasne odmitnuti prepnuti do beziciho MountBlue nepovazuje
+za chybu spusteni. Hlidac prepnuti opakuje automaticky a do te doby neblokuje
+systemove zkratky. Vlastni dialog MountBlue se pocita jako otevrene okno,
+ale nikdy se nemaximalizuje. Potvrzeni, odlozeni a odemykani se neprerusuji.
+Skutecna chyba startu rozlisuje chybejici soubor, odmitnute spusteni,
+nedostupne okno a odmitnute prepnuti. Duvod je i v udalosti `startup_error`
+v mistnim zaznamu; docasne opakovani focusu ma udalost `focus_retry`.
 Pause/Break nadale slouzi pro znovunacteni mimo odlozeni.
