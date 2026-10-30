@@ -7,23 +7,27 @@ DirCreate DONE_DIR
 InitDeviceConfig()
 firstId := g_device["id"]
 Assert(MIN_TEXT_LEN = 250 && WEEKLY_GOAL = 2500, "new installations use the normal profile")
+Assert(POSTPONE_MAX = 3, "normal installations retain three postponements")
 InitDeviceConfig()
 Assert(g_device["id"] = firstId, "installation ID survives a restart")
 shared := DONE_DIR . "\shared-offline"
 SaveDeviceConfig("brother", shared)
 InitDeviceConfig()
 Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 3000, "paired brother profile has 300 daily and 3000 weekly")
+Assert(POSTPONE_MAX = 2, "brother profile has one fewer postponement")
 Assert(g_device["id"] = firstId && g_device["folder"] = shared, "updates preserve identity and selected folder")
 IniWrite "different-device", g_device["path"], "Device", "Binding"
 IniWrite "brother-shared-v1", g_device["path"], "Device", "AutomaticSetup"
 InitDeviceConfig()
 Assert(g_device["role"] = "normal" && g_device["id"] != firstId && g_device["folder"] = "", "copied settings cannot assign brother profile or sharing to another device")
 Assert(g_device["autoSetup"] = "", "copied settings discard the automatic setup marker")
+Assert(POSTPONE_MAX = 3, "copied brother settings do not reduce someone else's postponements")
 SaveDeviceConfig("brother", shared)
 DEFAULT_DAILY_GOAL := 275
 BROTHER_DAILY_GOAL := 325
 ApplyProfileLimits("normal")
 Assert(MIN_TEXT_LEN = 275 && WEEKLY_GOAL = 2750, "normal weekly goal follows daily times ten")
+Assert(POSTPONE_MAX = 3, "switching back to normal restores three postponements")
 ApplyProfileLimits("brother")
 Assert(MIN_TEXT_LEN = 325 && WEEKLY_GOAL = 3250, "brother weekly goal follows daily times ten")
 InitPracticeLogs()

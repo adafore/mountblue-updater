@@ -56,6 +56,20 @@ Assert(g_postponeCount = 1, "repeat callback during postponement does not consum
 SetTimer ShowOverlayAgain, 0
 Suspend false
 Assert(!FileExist(STATE_FILE . ".tmp") && !FileExist(g_weekFile . ".tmp"), "completed saves leave no temporary state files")
+POSTPONE_MAX := 2
+g_postponedUntil := 0
+g_postponeCount := 1
+DoPostpone()
+Assert(g_postponeCount = 2 && g_postponedUntil > 0, "brother's second postponement is allowed")
+SetTimer ShowOverlayAgain, 0
+Suspend false
+g_postponedUntil := 0
+DoPostpone()
+Assert(g_postponeCount = 2 && g_postponedUntil = 0, "brother cannot take a third postponement")
+g_postponeCount := 3
+SaveState()
+LoadState()
+Assert(g_postponeCount = 2, "older three-use state remains exhausted under brother's new limit")
 FileAppend "All daily state tests passed.`n", "*"
 ExitApp
 

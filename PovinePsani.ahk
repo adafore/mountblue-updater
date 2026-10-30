@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 15   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 16   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -645,91 +645,45 @@ SplitWords(text) {
     return words
 }
 
-; Spočítá správně napsané znaky po slovech.
-; Limit chyb na slovo: 1 chyba (≤9 znaků), 2 chyby (10-19 znaků), 4 chyby (20+ znaků).
-; Při chybě se odečte počet chyb od délky slova.
+; Align the complete text by minimum edits; prefer more exact matches on ties.
+; Missing words or spaces do not invalidate the correctly typed continuation.
 CountCorrectChars(typed, expected) {
-    typedWords    := SplitWords(typed)
-    expectedWords := SplitWords(expected)
+    typed := RegExReplace(typed, "\r\n?|\n|\t", " ")
+    expected := RegExReplace(expected, "\r\n?|\n|\t", " ")
+    if typed == expected
+        return StrLen(expected)
+    typedChars := StrSplit(typed)
+    expectedChars := StrSplit(expected)
+    if !typedChars.Length || !expectedChars.Length
+        return 0
 
-    correctChars := 0
-    expIdx       := 1
-
-    loop typedWords.Length {
-        tw := typedWords[A_Index]
-
-        skipped := 0
-        while (expIdx <= expectedWords.Length && skipped <= 2) {
-            ew      := expectedWords[expIdx]
-            ewLen   := StrLen(ew)
-            dist    := LevenshteinWord(tw, ew)
-
-            ; Dynamický limit chyb podle délky slova
-            if (ewLen >= 20)
-                maxDist := 4
-            else if (ewLen >= 10)
-                maxDist := 2
-            else
-                maxDist := 1
-
-            if (dist <= maxDist) {
-                ; Přičti znaky slova minus počet chyb
-                correctChars += Max(ewLen - dist, 0)
-                expIdx++
-                break
-            }
-            ; Zkus jestli typed slovo nesedí na další expected slovo
-            if (expIdx + 1 <= expectedWords.Length) {
-                ewNext   := expectedWords[expIdx + 1]
-                ewNLen   := StrLen(ewNext)
-                distNext := LevenshteinWord(tw, ewNext)
-                if (ewNLen >= 20)
-                    maxDistNext := 4
-                else if (ewNLen >= 10)
-                    maxDistNext := 2
-                else
-                    maxDistNext := 1
-                if (distNext <= maxDistNext) {
-                    expIdx++
-                    skipped++
-                    continue
-                }
-            }
-            break
-        }
-        if (expIdx > expectedWords.Length)
-            break
+    previousCosts := [], previousMatches := []
+    loop expectedChars.Length + 1 {
+        previousCosts.Push(A_Index - 1)
+        previousMatches.Push(0)
     }
-
-    return correctChars
-}
-
-; Levenshtein distance pro dvě slova (znakový)
-LevenshteinWord(a, b) {
-    la := StrLen(a)
-    lb := StrLen(b)
-    if la = 0
-        return lb
-    if lb = 0
-        return la
-
-    prev := []
-    loop lb + 1
-        prev.Push(A_Index - 1)
-
-    loop la {
-        i   := A_Index
-        ca  := SubStr(a, i, 1)
-        curr := [i]
-        loop lb {
-            j  := A_Index
-            cb := SubStr(b, j, 1)
-            cost := ca = cb ? 0 : 1
-            curr.Push(Min(prev[j+1] + 1, curr[j] + 1, prev[j] + cost))
+    for i, typedChar in typedChars {
+        currentCosts := [i], currentMatches := [0]
+        for j, expectedChar in expectedChars {
+            same := typedChar == expectedChar
+            cost := previousCosts[j] + (same ? 0 : 1)
+            matches := previousMatches[j] + (same ? 1 : 0)
+            candidateCost := previousCosts[j + 1] + 1
+            candidateMatches := previousMatches[j + 1]
+            if candidateCost < cost || (candidateCost = cost && candidateMatches > matches) {
+                cost := candidateCost, matches := candidateMatches
+            }
+            candidateCost := currentCosts[j] + 1
+            candidateMatches := currentMatches[j]
+            if candidateCost < cost || (candidateCost = cost && candidateMatches > matches) {
+                cost := candidateCost, matches := candidateMatches
+            }
+            currentCosts.Push(cost)
+            currentMatches.Push(matches)
         }
-        prev := curr
+        previousCosts := currentCosts, previousMatches := currentMatches
     }
-    return prev[lb + 1]
+    return previousMatches[expectedChars.Length + 1]
 }
 
 ; ═══════════════════════════════════════════════════════════════
@@ -1852,9 +1806,10 @@ GetDeviceBinding() {
 }
 
 ApplyProfileLimits(role) {
-    global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, MIN_TEXT_LEN, WEEKLY_GOAL
+    global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, MIN_TEXT_LEN, WEEKLY_GOAL, POSTPONE_MAX
     MIN_TEXT_LEN := role = "brother" ? BROTHER_DAILY_GOAL : DEFAULT_DAILY_GOAL
     WEEKLY_GOAL := MIN_TEXT_LEN * 10
+    POSTPONE_MAX := role = "brother" ? 2 : 3
 }
 
 DeviceBindingFingerprint(binding) {

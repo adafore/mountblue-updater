@@ -41,6 +41,7 @@ Alternativne lze skript spustit s argumentem `--setup`.
 
 Bezny profil ma denni cil 250 znaku, bratruv profil 300 znaku.
 Tydenni cil je vzdy 10 * denni cil.
+Od verze 16 ma bratruv profil dve odlozeni denne, bezny profil nadale tri.
 Pri uprave limitu se meni pouze `DEFAULT_DAILY_GOAL` a `BROTHER_DAILY_GOAL`.
 
 Profil je navazany na jedinecne ID instalace, ucet Windows a pocitac.
@@ -82,3 +83,13 @@ Skutecna chyba startu rozlisuje chybejici soubor, odmitnute spusteni,
 nedostupne okno a odmitnute prepnuti. Duvod je i v udalosti `startup_error`
 v mistnim zaznamu; docasne opakovani focusu ma udalost `focus_retry`.
 Pause/Break nadale slouzi pro znovunacteni mimo odlozeni.
+
+## 5. Pocitani spravnych znaku
+
+Od verze 16 se porovnava cely napsany text s celym zadanim pomoci globalniho
+zarovnani s nejmensim poctem uprav. Pri stejne vzdalenosti se uprednostni
+vice presne shodnych znaku. Zapocitaji se jen shodne znaky vcetne mezer,
+rozlisuji se mala a velka pismena. Vynechane casti, preklepy nebo chybejici
+mezery neznehodnoti spravne pokracovani. Nadbytecne znaky se nepricitaji.
+Konce radku a tabulatory se pri porovnani povazuji za mezeru.
+Puvodni ulozene vysledky se pri aktualizaci automaticky neprepisuji.

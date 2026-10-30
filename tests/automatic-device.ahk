@@ -32,6 +32,7 @@ if A_Args.Length {
     SaveDeviceConfig(g_device["role"], g_device["folder"])
     ApplyProfileLimits(g_device["role"])
     Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 3000, "automatic profile applies 300 daily and 3000 weekly")
+    Assert(POSTPONE_MAX = 2, "known brother PC automatically gets two postponements")
     Assert(g_device["id"] = originalId, "automatic configuration preserves installation ID and log root")
     Assert(IniRead(g_device["path"], "Device", "AutomaticSetup") = "brother-shared-v1", "one-time migration marker is persisted")
     Assert(!ApplyAutomaticDeviceConfig(g_device), "repeated startup does not repeat the migration")
