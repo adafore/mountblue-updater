@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 16   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 17   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -645,18 +645,99 @@ SplitWords(text) {
     return words
 }
 
-; Align the complete text by minimum edits; prefer more exact matches on ties.
-; Missing words or spaces do not invalidate the correctly typed continuation.
+; Align word runs globally, crediting characters only inside sufficiently similar words.
+; Joining up to three neighboring words tolerates missing or extra spaces.
 CountCorrectChars(typed, expected) {
     typed := RegExReplace(typed, "\r\n?|\n|\t", " ")
     expected := RegExReplace(expected, "\r\n?|\n|\t", " ")
     if typed == expected
         return StrLen(expected)
-    typedChars := StrSplit(typed)
-    expectedChars := StrSplit(expected)
-    if !typedChars.Length || !expectedChars.Length
+    typedWords := ScoringWords(typed), expectedWords := ScoringWords(expected)
+    if !typedWords.Length || !expectedWords.Length
         return 0
+    typedLeading := StrLen(typed) - StrLen(LTrim(typed, " "))
+    expectedLeading := StrLen(expected) - StrLen(LTrim(expected, " "))
+    costs := [[Abs(typedLeading - expectedLeading)]], matches := [[0]]
+    cache := [Map(), Map()]
+    for j, word in expectedWords {
+        costs[1].Push(costs[1][j] + StrLen(word.text) + word.gap)
+        matches[1].Push(0)
+    }
+    for i, typedWord in typedWords {
+        rowCosts := [costs[i][1] + StrLen(typedWord.text) + typedWord.gap]
+        rowMatches := [0]
+        for j, expectedWord in expectedWords {
+            cost := costs[i][j + 1] + StrLen(typedWord.text) + typedWord.gap
+            count := matches[i][j + 1]
+            candidateCost := rowCosts[j] + StrLen(expectedWord.text) + expectedWord.gap
+            candidateMatches := rowMatches[j]
+            if candidateCost < cost || (candidateCost = cost && candidateMatches > count)
+                cost := candidateCost, count := candidateMatches
 
+            typedGroup := "", typedInternalSpaces := 0
+            loop Min(3, i) {
+                typedCount := A_Index
+                typedPart := typedWords[i - typedCount + 1]
+                typedGroup := typedPart.text . typedGroup
+                if typedCount > 1
+                    typedInternalSpaces += typedPart.gap
+                expectedGroup := "", expectedInternalSpaces := 0
+                loop Min(3, j) {
+                    expectedCount := A_Index
+                    expectedPart := expectedWords[j - expectedCount + 1]
+                    expectedGroup := expectedPart.text . expectedGroup
+                    if expectedCount > 1
+                        expectedInternalSpaces += expectedPart.gap
+                    if typedCount > 1 && expectedCount > 1
+                        continue
+                    pair := CachedScoringWord(cache, typedGroup, expectedGroup, i = typedWords.Length)
+                    if !pair.valid
+                        continue
+                    candidateCost := costs[i - typedCount + 1][j - expectedCount + 1] + pair.cost
+                        + typedInternalSpaces + expectedInternalSpaces + Abs(typedWord.gap - expectedWord.gap)
+                    candidateMatches := matches[i - typedCount + 1][j - expectedCount + 1] + pair.matches
+                        + Min(typedWord.gap, expectedWord.gap)
+                    if typedCount = i && expectedCount = j
+                        candidateMatches += Min(typedLeading, expectedLeading)
+                    if candidateCost < cost || (candidateCost = cost && candidateMatches > count)
+                        cost := candidateCost, count := candidateMatches
+                }
+            }
+            rowCosts.Push(cost), rowMatches.Push(count)
+        }
+        costs.Push(rowCosts), matches.Push(rowMatches)
+    }
+    return matches[typedWords.Length + 1][expectedWords.Length + 1]
+}
+
+ScoringWords(text) {
+    words := [], position := 1
+    while found := RegExMatch(text, "(\S+)( *)", &part, position) {
+        words.Push({text: part[1], gap: StrLen(part[2])})
+        position := found + StrLen(part[0])
+    }
+    return words
+}
+
+CachedScoringWord(cache, typed, expected, allowPartial) {
+    group := cache[allowPartial ? 2 : 1]
+    if !group.Has(typed)
+        group[typed] := Map()
+    if !group[typed].Has(expected)
+        group[typed][expected] := ScoreSimilarWord(typed, expected, allowPartial)
+    return group[typed][expected]
+}
+
+ScoreSimilarWord(typed, expected, allowPartial := false) {
+    if typed == expected
+        return {valid: true, cost: 0, matches: StrLen(typed)}
+    typedLength := StrLen(typed), expectedLength := StrLen(expected)
+    prefixLimit := allowPartial ? Min(expectedLength, Floor(typedLength * 5 / 3)) : expectedLength
+    rejected := {valid: false, cost: 0, matches: 0}
+    if !typedLength || !prefixLimit || Min(typedLength, prefixLimit) * 5 < Max(typedLength, prefixLimit) * 3
+        return rejected
+    typedChars := StrSplit(typed)
+    expectedChars := StrSplit(SubStr(expected, 1, prefixLimit))
     previousCosts := [], previousMatches := []
     loop expectedChars.Length + 1 {
         previousCosts.Push(A_Index - 1)
@@ -683,7 +764,19 @@ CountCorrectChars(typed, expected) {
         }
         previousCosts := currentCosts, previousMatches := currentMatches
     }
-    return previousMatches[expectedChars.Length + 1]
+    ; A final unfinished word is compared with prefixes, not with its untyped suffix.
+    best := rejected
+    firstPrefix := allowPartial ? 1 : expectedChars.Length
+    loop expectedChars.Length - firstPrefix + 1 {
+        length := firstPrefix + A_Index - 1
+        count := previousMatches[length + 1]
+        if count * 5 < Max(typedLength, length) * 3
+            continue
+        cost := previousCosts[length + 1] + expectedLength - length
+        if !best.valid || cost < best.cost || (cost = best.cost && count > best.matches)
+            best := {valid: true, cost: cost, matches: count}
+    }
+    return best
 }
 
 ; ═══════════════════════════════════════════════════════════════

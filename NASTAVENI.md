@@ -86,10 +86,18 @@ Pause/Break nadale slouzi pro znovunacteni mimo odlozeni.
 
 ## 5. Pocitani spravnych znaku
 
-Od verze 16 se porovnava cely napsany text s celym zadanim pomoci globalniho
-zarovnani s nejmensim poctem uprav. Pri stejne vzdalenosti se uprednostni
-vice presne shodnych znaku. Zapocitaji se jen shodne znaky vcetne mezer,
-rozlisuji se mala a velka pismena. Vynechane casti, preklepy nebo chybejici
-mezery neznehodnoti spravne pokracovani. Nadbytecne znaky se nepricitaji.
-Konce radku a tabulatory se pri porovnani povazuji za mezeru.
+Od verze 17 se globalne zarovnavaji slova z celeho pokusu a celeho zadani.
+Uvnitre dvojice slov se hledaji presne shodne znaky, ale dvojice muze dostat
+body jen pri shode alespon 60 % znaku delsiho slova. Nejde o slovnik ani
+kontrolu vyznamu; porovnava se podobnost s konkretnim zadanim.
+
+Vynechane casti neznehodnoti spravne pokracovani. Chybejici nebo nadbytecne
+mezery se resi spojenim az tri sousednich slov. U nedopsaneho posledniho
+slova se overuje podobnost se zacatkem ocekavaneho slova, takze neni nutne
+dokoncit cele slovo nebo cele cviceni. Spravne casti uznaneho slova se pocitaji
+i pri nekolika preklepech; nahodne shody v odmitnutych slovech nikoli.
+
+Mezery se pocitaji jen u uznanych slov, nejvyse tolikrat, kolik jich obsahuje
+zadani i pokus. Rozlisuji se mala a velka pismena. Nadbytecne znaky se
+nepricitaji. Konce radku a tabulatory se pri porovnani povazuji za mezeru.
 Puvodni ulozene vysledky se pri aktualizaci automaticky neprepisuji.
