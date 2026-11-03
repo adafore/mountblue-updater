@@ -41,7 +41,7 @@ Alternativne lze skript spustit s argumentem `--setup`.
 
 Bezny profil ma denni cil 250 znaku, bratruv profil 300 znaku.
 Tydenni cil je vzdy 10 * denni cil.
-Od verze 16 ma bratruv profil dve odlozeni denne, bezny profil nadale tri.
+Od verze 19 ma bratruv profil jedno odlozeni denne, bezny profil nadale tri.
 Pri uprave limitu se meni pouze `DEFAULT_DAILY_GOAL` a `BROTHER_DAILY_GOAL`.
 
 Profil je navazany na jedinecne ID instalace, ucet Windows a pocitac.

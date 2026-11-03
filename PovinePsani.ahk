@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 18   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 19   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -32,10 +32,12 @@ STATE_FILE        := ""
 SetDayFiles()
 DEFAULT_DAILY_GOAL := 250
 BROTHER_DAILY_GOAL := 500
+DEFAULT_POSTPONE_COUNT := 3
+BROTHER_POSTPONE_COUNT := 1
 MIN_TEXT_LEN      := DEFAULT_DAILY_GOAL
 START_HOUR        := 11
 OVERLAY_W         := 520
-POSTPONE_MAX      := 3
+POSTPONE_MAX      := DEFAULT_POSTPONE_COUNT
 POSTPONE_MIN      := 30
 WEEKLY_GOAL       := MIN_TEXT_LEN * 10
 ; ───────────────────────────────────────────────────────────────
@@ -1899,10 +1901,11 @@ GetDeviceBinding() {
 }
 
 ApplyProfileLimits(role) {
-    global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, MIN_TEXT_LEN, WEEKLY_GOAL, POSTPONE_MAX
+    global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, DEFAULT_POSTPONE_COUNT, BROTHER_POSTPONE_COUNT
+    global MIN_TEXT_LEN, WEEKLY_GOAL, POSTPONE_MAX
     MIN_TEXT_LEN := role = "brother" ? BROTHER_DAILY_GOAL : DEFAULT_DAILY_GOAL
     WEEKLY_GOAL := MIN_TEXT_LEN * 10
-    POSTPONE_MAX := role = "brother" ? 2 : 3
+    POSTPONE_MAX := role = "brother" ? BROTHER_POSTPONE_COUNT : DEFAULT_POSTPONE_COUNT
 }
 
 DeviceBindingFingerprint(binding) {
