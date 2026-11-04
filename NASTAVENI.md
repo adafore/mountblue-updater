@@ -14,7 +14,7 @@ muze vyzadovat opravneni k upravam. Verejny odkaz neni potreba.
 ## 2. Automaticke nastaveni znameho bratrova PC
 
 Od verze 14 se znamy bratruv ucet a pocitac nastavi automaticky pri startu.
-Dostane profil bratra (300 znaku denne, 3000 tydne). Pokud dosud nebyla
+Dostane profil bratra (450 znaku denne, 4500 tydne). Pokud dosud nebyla
 vybrana sdilena slozka, pouzije se `OneDrive\Attachments\OneNote` v jeho
 uzivatelske slozce Windows. Jiz vybrana slozka se neprepisuje.
 
@@ -39,9 +39,10 @@ program nevytvari nahradni slozku a nemeni opravneni OneDrivu.
 Vyber slozky ani zmena profilu nejsou soucasti bezneho panelu.
 Alternativne lze skript spustit s argumentem `--setup`.
 
-Bezny profil ma denni cil 250 znaku, bratruv profil 300 znaku.
+Bezny profil ma denni cil 250 znaku, bratruv profil 450 znaku.
 Tydenni cil je vzdy 10 * denni cil.
 Od verze 19 ma bratruv profil jedno odlozeni denne, bezny profil nadale tri.
+Od verze 20 ma bratruv profil denni cil 450 znaku (4500 tydne) a tlacitko rychleho odlozeni na 10 sekund.
 Pri uprave limitu se meni pouze `DEFAULT_DAILY_GOAL` a `BROTHER_DAILY_GOAL`.
 
 Profil je navazany na jedinecne ID instalace, ucet Windows a pocitac.
@@ -83,6 +84,22 @@ Skutecna chyba startu rozlisuje chybejici soubor, odmitnute spusteni,
 nedostupne okno a odmitnute prepnuti. Duvod je i v udalosti `startup_error`
 v mistnim zaznamu; docasne opakovani focusu ma udalost `focus_retry`.
 Pause/Break nadale slouzi pro znovunacteni mimo odlozeni.
+
+Pri zamcenem cviceni je hlavni panel Windows prekryty (zadne nahledy oken,
+nic se nezavira) a okno Obraz v obraze se zavre. Vsechny ne-systemove aplikace
+(hry, Discord, Roblox, Steam, webove prohlizece, prehravace videa atd.) jsou
+po dobu zamceni udrzovany minimalizovane, takze je nelze hrat ani sledovat
+na dalsim monitoru nebo vedle Spotify. Povoleny zustavaji pouze veci potrebne
+pro program (MountBlue, dialog na heslo 953, panel), Spotify, nastroje pro snimani
+(PowerToys, Vystrizky) a systemove utility (Nastaveni Windows, Pruzkumnik souboru).
+Pod zelenym tlacitkem Spotify je k dispozici tlacitko "Zastavit to, co delas (10 s)".
+Pri 1. spusteni i po kazdem normalnim odlozeni se zobrazi a po stisku odemkne cele PC
+na 10 sekund (vstup, panely i okna), presne jako pri odlozeni, aby bylo mozne zastavit
+video, ulozit rozdelanou praci nebo ukoncit aktivitu. Po 10 sekundach se cviceni opet
+uzamkne a tlacitko se skryje az do dalsiho normalniho odlozeni. Spotify se ovlada
+vlastnim zelenym tlacitkem v panelu nebo zkratkou Ctrl+Alt+Insert.
+
+
 
 ## 5. Pocitani spravnych znaku
 

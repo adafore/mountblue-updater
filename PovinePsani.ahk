@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 19   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 20   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ DONE_FILE         := ""
 STATE_FILE        := ""
 SetDayFiles()
 DEFAULT_DAILY_GOAL := 250
-BROTHER_DAILY_GOAL := 500
+BROTHER_DAILY_GOAL := 450
 DEFAULT_POSTPONE_COUNT := 3
 BROTHER_POSTPONE_COUNT := 1
 MIN_TEXT_LEN      := DEFAULT_DAILY_GOAL
@@ -208,6 +208,8 @@ global g_retryGui := 0
 global g_activationFailure := ""
 global g_focusRetryCount := 0
 global g_watchWindowBusy := false
+global g_taskbarShields := Map()
+global g_spotifyGraceUntil := 0
 global g_startAttemptBusy := false
 
 ; Overlay labely
@@ -215,7 +217,8 @@ global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
 global lbl_confirm, btn_confirm_yes, btn_confirm_no
 global lbl_weekly
 global lbl_result, lbl_errors, lbl_typed, lbl_typed_label
-global lbl_postpone, btn_postpone
+global lbl_postpone, btn_postpone, btn_spotify, btn_quick_pause
+global g_quickPauseAvailable := true
 global lbl_task
 global g_btnYesGui    := 0
 global g_btnNoGui     := 0
@@ -260,7 +263,7 @@ InitPracticeLogs()
 OnExit PracticeExit
 StartPracticeInput()
 CreateOverlay()
-SetTimer WatchWindow, 1000
+SetTimer WatchWindow, 250
 SetTimer PollClipboard, 800
 SetTimer FlushPracticeLogs, 2000
 SetTimer SyncSharedLogs, 15000
@@ -338,13 +341,33 @@ WatchWindow(*) {
     global g_done, g_mode, g_overlay, g_activationFailure, g_focusRetryCount, g_watchWindowBusy
     if g_done || g_mode != "practice" || g_watchWindowBusy
         return
+    SyncTaskbarShield()
+    if g_locked {
+        ClosePictureInPictureWindows()
+        MinimizeRestrictedWindows()
+    }
     if IsObject(g_overlay) && WinActive("ahk_id " . g_overlay.Hwnd)
         return
+    activeHwnd := WinActive("A")
     try activeExe := ProcessGetName(WinGetPID("A"))
     catch
         activeExe := ""
+    if g_locked && !IsAllowedWindow(activeHwnd) {
+        try WinMinimize "A"
+        ActivateMountBlue(2)
+        return
+    }
     if InStr(activeExe, "PowerToys") || InStr(activeExe, "Spotify")
         || InStr(activeExe, "SnippingTool") || InStr(activeExe, "ScreenSketch")
+        || activeExe = "SystemSettings.exe" || activeExe = "Taskmgr.exe"
+        return
+    try {
+        activeCls := WinGetClass("A")
+        if activeExe = "explorer.exe" && (activeCls = "CabinetWClass" || activeCls = "ExploreWClass")
+            return
+    }
+    ; Po spuštění Spotify nech aplikaci chvíli naběhnout, ať jí hlídač nebere fokus.
+    if IsSet(g_spotifyGraceUntil) && A_TickCount < g_spotifyGraceUntil && activeExe != "MountBlue.exe"
         return
     if activeExe = "MountBlue.exe" {
         if g_focusRetryCount
@@ -439,6 +462,11 @@ WatchWindow(*) {
     ^w::      return
     ^F4::     return
     !Tab::    return
+
+    ; Ovládání Spotify při zamčeném cvičení:
+    ^!PgDn::  SendInput "{Media_Next}"
+    ^!PgUp::  SendInput "{Media_Prev}"
+    ^!Insert:: ToggleSpotifyWindow()
 #HotIf
 
 ; Nouzove ukonceni - Ctrl+Delete (heslo 953, max 10 pokusu, timeout 10s)
@@ -489,7 +517,7 @@ WatchWindow(*) {
     g_passwordOpen := false
     SetPracticeMode(previousMode)
     LockInput(previousMode = "practice")
-    SetTimer WatchWindow,  1000
+    SetTimer WatchWindow,  250
 
     if g_deleteCount >= 10 {
         g_deleteLocked := true
@@ -875,9 +903,11 @@ EvaluateExerciseInput() {
 ; ═══════════════════════════════════════════════════════════════
 DoPostpone() {
     global g_postponeCount, g_postponedUntil, POSTPONE_MAX, POSTPONE_MIN, g_overlay
+    global g_quickPauseAvailable
     if CheckDateChange() || g_postponedUntil > 0 || g_postponeCount >= POSTPONE_MAX
         return
     g_postponeCount++
+    g_quickPauseAvailable := true   ; Resetuje se po každém normálním odložení
     msDelay := POSTPONE_MIN * 60 * 1000
     g_postponedUntil := A_TickCount + msDelay
     QueuePracticeEvent("postpone", "", String(g_postponeCount))
@@ -902,7 +932,7 @@ ShowOverlayAgain() {
         return
     g_postponedUntil := 0
     ; Obnov timery
-    SetTimer WatchWindow,  1000
+    SetTimer WatchWindow,  250
     ; Znovu zamkni
     Suspend false
     if IsObject(g_overlay) {
@@ -910,6 +940,29 @@ ShowOverlayAgain() {
         UpdateOverlay()
     }
     TryStartPractice()
+    SaveState()
+}
+
+
+; ═══════════════════════════════════════════════════════════════
+;  RYCHLÉ ZASTAVENÍ AKTIVITY (20 s)
+; ═══════════════════════════════════════════════════════════════
+DoQuickPause() {
+    global g_quickPauseAvailable, g_postponedUntil, g_overlay, g_done
+    if g_done || CheckDateChange() || g_postponedUntil > 0 || !g_quickPauseAvailable
+        return
+    g_quickPauseAvailable := false
+    msDelay := 10 * 1000  ; 10 sekund
+    g_postponedUntil := A_TickCount + msDelay
+    QueuePracticeEvent("quick_pause", "", "10s")
+    FlushPracticeLogs()
+    SetPracticeMode("postponed")
+    SetTimer WatchWindow, 0
+    BlockInput "Off"
+    Suspend true
+    if IsObject(g_overlay)
+        g_overlay.Hide()
+    SetTimer ShowOverlayAgain, -msDelay
     SaveState()
 }
 
@@ -956,7 +1009,7 @@ BuildOverlayUI(w, h) {
     global lbl_confirm, btn_confirm_yes, btn_confirm_no
     global lbl_weekly
     global lbl_result, lbl_errors, lbl_typed, lbl_typed_label
-    global lbl_postpone, btn_postpone
+    global lbl_postpone, btn_postpone, btn_spotify, btn_quick_pause
     global lbl_task
 
     ; ── Paleta ──────────────────────────────────────────
@@ -1109,7 +1162,7 @@ BuildOverlayUI(w, h) {
     col2x := ipad + 68
     for item in keys {
         g_overlay.SetFont("s8 w700 c" . cYellow, "Consolas")
-        g_overlay.Add("Text", "x" . ipad . " y" . y . " w66", item[1])
+        g_overlay.Add("Text", "x" . ipad . " y" . y . " w64", item[1])
         g_overlay.SetFont("s8 w400 c" . cSub, "Segoe UI")
         g_overlay.Add("Text", "x" . col2x . " y" . y . " w" . (ilw - 68), item[2])
         y += gapKeys
@@ -1138,6 +1191,24 @@ BuildOverlayUI(w, h) {
     g_overlay.SetFont("s8 w400 c" . cSub, "Segoe UI")
     lbl_status := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw . " h36", "Shift+Win+T  →  označ text")
     y += 44
+
+    Sep(pad, y, w) , y += gapSep
+
+    ; ════════════════════════════════════════════════════
+    ; SPOTIFY (zelené tlačítko pod vším v menu)
+    ; ════════════════════════════════════════════════════
+    g_overlay.SetFont("s10 w700 cFFFFFF", "Segoe UI")
+    btn_spotify := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw . " h36 Center +0x200 Background1a7a3a", "♫   Spotify")
+    btn_spotify.OnEvent("Click", (*) => ToggleSpotifyWindow())
+    y += 44
+
+    ; ════════════════════════════════════════════════════
+    ; ZASTAVIT TO, CO DĚLÁŠ (20 s odemčení PC)
+    ; ════════════════════════════════════════════════════
+    g_overlay.SetFont("s9 w600 c" . cText, "Segoe UI")
+    btn_quick_pause := g_overlay.Add("Button", "x" . pad . " y" . y . " w" . lw . " h28", "⏸  Zastavit to, co děláš  ( 10 s )")
+    btn_quick_pause.OnEvent("Click", (*) => DoQuickPause())
+    y += 36
 
     Sep(pad, y, w) , y += gapSep
 
@@ -1299,8 +1370,16 @@ ShowUnlockButton() {
         }
     }
     if (btnY = 0) {
-        lbl_status.GetPos(&cx, &cy, &cw, &ch)
-        btnY := ovY + cy + ch + 10
+        if IsSet(btn_quick_pause) && IsObject(btn_quick_pause) && btn_quick_pause.Visible {
+            btn_quick_pause.GetPos(&cx, &cy, &cw, &ch)
+            btnY := ovY + cy + ch + 14
+        } else if IsSet(btn_spotify) && IsObject(btn_spotify) {
+            btn_spotify.GetPos(&cx, &cy, &cw, &ch)
+            btnY := ovY + cy + ch + 14
+        } else {
+            lbl_status.GetPos(&cx, &cy, &cw, &ch)
+            btnY := ovY + cy + ch + 10
+        }
     }
 
     ownerOpt := " +Owner" . g_overlay.Hwnd
@@ -1542,6 +1621,12 @@ UpdateOverlay(statusOverride := "") {
         lbl_postpone.SetFont("c7A7FA8")
     }
 
+    ; ── Tlačítko zastavit to, co děláš (20 s) ──
+    if IsSet(btn_quick_pause) && IsObject(btn_quick_pause) {
+        btn_quick_pause.Visible := g_quickPauseAvailable && !g_done
+        btn_quick_pause.Enabled := g_quickPauseAvailable && !g_done
+    }
+
     ; ── Status ──
     if statusOverride != "" {
         lbl_status.Value := statusOverride
@@ -1568,6 +1653,231 @@ LockInput(state) {
     ; Text a tlacitka zustavaji ovladatelne i pri spusteni jako spravce.
     BlockInput "Off"
     g_locked := state && Integer(FormatTime(, "H")) >= START_HOUR
+    SyncTaskbarShield()
+    if g_locked
+        MinimizeRestrictedWindows()
+}
+
+; ─── Štít přes hlavní panel Windows ────────────────────────────
+; Náhledy oken na hlavním panelu (a Aero Peek přes celou obrazovku) ukazují
+; živý obsah jiných aplikací, např. video v prohlížeči. Při zamčeném cvičení
+; proto hlavní panel překryjeme nezaktivovatelným oknem. Nic se nezavírá ani
+; nemění v systému; po ukončení skriptu štít sám zmizí.
+ShouldShieldTaskbar() {
+    global g_mode, g_locked, g_done, g_passwordOpen
+    if !IsSet(g_passwordOpen)
+        g_passwordOpen := false
+    return g_mode = "practice" && g_locked && !g_done && !g_passwordOpen
+}
+
+SyncTaskbarShield() {
+    global g_taskbarShields
+    if !IsSet(g_taskbarShields) || !IsObject(g_taskbarShields)
+        g_taskbarShields := Map()
+    wanted := Map()
+    if ShouldShieldTaskbar() {
+        try {
+            for hwnd in TaskbarWindows() {
+                rect := TaskbarShieldRect(hwnd)
+                if !rect
+                    continue
+                wanted[hwnd] := true
+                if !g_taskbarShields.Has(hwnd) {
+                    shield := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x08000000", "MBTaskbarShield")
+                    shield.BackColor := "0A0B1A"
+                    g_taskbarShields[hwnd] := shield
+                }
+                shield := g_taskbarShields[hwnd]
+                shield.Show("NoActivate x" . rect.x . " y" . rect.y . " w" . rect.w . " h" . rect.h)
+                ; Hlavní panel se po kliknutí umí vynořit nad ostatní topmost okna.
+                DllCall("SetWindowPos", "ptr", shield.Hwnd, "ptr", -1, "int", 0, "int", 0
+                    , "int", 0, "int", 0, "uint", 0x13)
+            }
+        }
+    }
+    for hwnd, shield in g_taskbarShields.Clone() {
+        if wanted.Has(hwnd)
+            continue
+        try shield.Hide()
+    }
+}
+
+TaskbarWindows() {
+    list := []
+    for cls in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+        for hwnd in WinGetList("ahk_class " . cls)
+            list.Push(hwnd)
+    }
+    return list
+}
+
+; Obdélník štítu: celý hlavní panel; u automaticky skrytého panelu aspoň
+; pruh u okraje obrazovky, odkud by se vysunul.
+TaskbarShieldRect(hwnd) {
+    WinGetPos &x, &y, &w, &h, "ahk_id " . hwnd
+    if w <= 0 || h <= 0
+        return 0
+    cx := x + w // 2
+    cy := y + h // 2
+    left := 0, top := 0, right := A_ScreenWidth, bottom := A_ScreenHeight
+    loop MonitorGetCount() {
+        MonitorGet(A_Index, &ml, &mt, &mr, &mb)
+        if cx >= ml && cx < mr && cy >= mt && cy < mb {
+            left := ml, top := mt, right := mr, bottom := mb
+            break
+        }
+    }
+    minThickness := 48
+    if w >= h {
+        thickness := Max(h, minThickness)
+        y := (cy > (top + bottom) // 2) ? bottom - thickness : top
+        x := left
+        w := right - left
+        h := thickness
+    } else {
+        thickness := Max(w, minThickness)
+        x := (cx > (left + right) // 2) ? right - thickness : left
+        y := top
+        h := bottom - top
+        w := thickness
+    }
+    return {x: x, y: y, w: w, h: h}
+}
+
+; Plovoucí okno videa (Obraz v obraze) zůstává nad MountBlue. Zavře se jen
+; toto okno, prohlížeč a jeho karty běží dál.
+ClosePictureInPictureWindows() {
+    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1") {
+        try {
+            if IsPictureInPictureTitle(WinGetTitle("ahk_id " . hwnd))
+                && (WinGetExStyle("ahk_id " . hwnd) & 0x8)
+                WinClose "ahk_id " . hwnd
+        }
+    }
+    for hwnd in WinGetList("ahk_class MozillaDialogClass") {
+        try {
+            if IsPictureInPictureTitle(WinGetTitle("ahk_id " . hwnd))
+                WinClose "ahk_id " . hwnd
+        }
+    }
+}
+
+IsPictureInPictureTitle(title) {
+    return RegExMatch(title, "i)^(Picture[ -]in[ -]Picture|Obraz v obraze)") ? true : false
+}
+
+; Během zamčeného cvičení minimalizuje webové prohlížeče a přehrávače videa.
+; Karet ani procesů se nedotkne, zvuk na pozadí (hudba, podcasty) hraje dál.
+; Zabraňuje obcházení přes Windows 11 rozložení přichycení (Snap layout / Snap Assist)
+; vedle okna Spotify i náhledům na vedlejších monitorech.
+; Během zamčeného cvičení minimalizuje všechny nepovolené aplikace (hry, Discord,
+; Roblox, Steam, webové prohlížeče, přehrávače médií atd.).
+; Ponechává pouze program MountBlue, okna skriptu (zadání hesla, menu), Spotify,
+; nástroje OCR / Výstřižky a systémové utility (Nastavení, Průzkumník souborů).
+MinimizeRestrictedWindows() {
+    ownPid := ProcessExist()
+    for hwnd in WinGetList() {
+        try {
+            if WinGetMinMax("ahk_id " . hwnd) = -1
+                continue
+            if !DllCall("IsWindowVisible", "ptr", hwnd)
+                continue
+            if !IsAllowedWindow(hwnd, ownPid)
+                WinMinimize "ahk_id " . hwnd
+        }
+    }
+}
+
+IsAllowedWindow(hwnd, ownPid := 0) {
+    if !hwnd
+        return true
+    if !ownPid
+        ownPid := ProcessExist()
+    try {
+        if ownPid && WinGetPID("ahk_id " . hwnd) = ownPid
+            return true
+    }
+    try cls := WinGetClass("ahk_id " . hwnd)
+    catch
+        cls := ""
+    if cls = "Progman" || cls = "WorkerW" || cls = "Shell_TrayWnd" || cls = "Shell_SecondaryTrayWnd"
+        || cls = "Windows.UI.Core.CoreWindow"
+        return true
+
+    try exe := WinGetProcessName("ahk_id " . hwnd)
+    catch {
+        try exe := ProcessGetName(WinGetPID("ahk_id " . hwnd))
+        catch
+            exe := ""
+    }
+    try title := WinGetTitle("ahk_id " . hwnd)
+    catch
+        title := ""
+
+    if exe = "ApplicationFrameHost.exe" {
+        if InStr(title, "Roblox")
+            return false
+        return true
+    }
+
+    if title = "" && !InStr(exe, "Roblox") && !InStr(exe, "Discord")
+        return true
+
+    return IsAllowedWindowProcess(exe)
+}
+
+IsAllowedWindowProcess(exe) {
+    if exe = ""
+        return true
+
+    ; MountBlue
+    if exe = "MountBlue.exe"
+        return true
+
+    ; Spotify (hudba, podcasty)
+    if InStr(exe, "Spotify")
+        return true
+
+    ; Nástroje pro snímání / OCR
+    if InStr(exe, "PowerToys") || InStr(exe, "SnippingTool") || InStr(exe, "ScreenSketch")
+        return true
+
+    ; Průzkumník souborů (složky, plocha, hlavní panel)
+    if exe = "explorer.exe"
+        return true
+
+    ; Nastavení Windows a správce úloh
+    if exe = "SystemSettings.exe" || exe = "Taskmgr.exe"
+        return true
+
+    ; Systémové dialogy, ověření Windows, zadávání textu
+    if exe = "CredentialUIBroker.exe" || exe = "Consent.exe" || exe = "LogonUI.exe"
+        || exe = "SearchHost.exe" || exe = "StartMenuExperienceHost.exe"
+        || exe = "ShellExperienceHost.exe" || exe = "TextInputHost.exe" || exe = "ctfmon.exe"
+        || exe = "OpenWith.exe" || exe = "rundll32.exe"
+        return true
+
+    ; Konzole / terminály
+    if exe = "cmd.exe" || exe = "powershell.exe" || exe = "conhost.exe" || exe = "WindowsTerminal.exe"
+        return true
+
+    ; Samotný běžící skript PovinePsani.ahk (okno na heslo 953, panel, štíty lišty)
+    try {
+        ownPid := ProcessExist()
+        if ownPid && exe = ProcessGetName(ownPid)
+            return true
+    }
+
+    ; UWP host (ApplicationFrameHost): základní systémové aplikace jsou povolené
+    if exe = "ApplicationFrameHost.exe"
+        return true
+
+    ; Vše ostatní (hry, Discord, Roblox, Steam, prohlížeče, přehrávače...) je zakázané a minimalizuje se
+    return false
+}
+
+IsRestrictedWindowProcess(exe) {
+    return !IsAllowedWindowProcess(exe)
 }
 
 SetDayFiles(now := "") {
@@ -1581,6 +1891,8 @@ SetDayFiles(now := "") {
 
 IsNewDay(now := "") {
     global SESSION_DAY
+    if !IsSet(SESSION_DAY) || SESSION_DAY = ""
+        return false
     if now = ""
         now := A_Now
     return FormatTime(now, "yyyy-MM-dd") != SESSION_DAY
@@ -1781,6 +2093,8 @@ SaveWeeklyState() {
 
 SaveState() {
     global STATE_FILE, DONE_DIR, g_postponeCount, g_charsAccumulated, g_exerciseNum
+    if !IsSet(STATE_FILE) || STATE_FILE = "" || !IsSet(DONE_DIR) || DONE_DIR = ""
+        return
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
     WriteStateFile(STATE_FILE, g_postponeCount . "`n" . g_charsAccumulated . "`n" . g_exerciseNum)
@@ -2177,6 +2491,7 @@ SetPracticeMode(mode) {
         } else if g_inputHook.InProgress
             g_inputHook.Stop()
     }
+    SyncTaskbarShield()
 }
 
 TryStartPractice() {
@@ -2273,6 +2588,94 @@ IsPracticeInputActive() {
     return true
 }
 
+
+; Spotify z menu i z Ctrl+Alt+Insert: otevře / přepne na Spotify, a pokud už je
+; nahoře, vrátí MountBlue. Hlavní panel je při cvičení zakrytý.
+ToggleSpotifyWindow() {
+    global g_spotifyGraceUntil, g_locked
+    if g_locked
+        MinimizeRestrictedWindows()
+    if InStr(TopApplicationExe(), "Spotify") {
+        g_spotifyGraceUntil := 0
+        ActivateMountBlue(2)
+        SyncTaskbarShield()
+        return
+    }
+    g_spotifyGraceUntil := A_TickCount + 25000
+    hwnd := FindSpotifyWindow()
+    if hwnd {
+        try {
+            if WinGetMinMax("ahk_id " . hwnd) = -1
+                WinRestore "ahk_id " . hwnd
+            WinShow "ahk_id " . hwnd
+            WinActivate "ahk_id " . hwnd
+        }
+        SyncTaskbarShield()
+        return
+    }
+    if !ProcessExist("Spotify.exe") {
+        LaunchSpotify()
+        return
+    }
+    ; Pokud proces již běží, ale okno zatím nebylo nalezeno (např. v oznamovací oblasti)
+    try Run "spotify:"
+}
+
+FindSpotifyWindow() {
+    for hwnd in WinGetList("ahk_exe Spotify.exe") {
+        try {
+            title := WinGetTitle("ahk_id " . hwnd)
+            if title = ""
+                continue
+            minMax := WinGetMinMax("ahk_id " . hwnd)
+            if minMax = -1
+                return hwnd
+            WinGetPos &x, &y, &w, &h, "ahk_id " . hwnd
+            if w >= 200 && h >= 200
+                return hwnd
+        }
+    }
+    return 0
+}
+
+LaunchSpotify() {
+    localAppData := EnvGet("LOCALAPPDATA")
+    storeExe := localAppData != "" ? localAppData . "\Microsoft\WindowsApps\Spotify.exe" : ""
+    if FileExist(storeExe) {
+        try {
+            Run storeExe
+            return true
+        }
+    }
+    try {
+        Run "spotify:"
+        return true
+    }
+    exe := A_AppData . "\Spotify\Spotify.exe"
+    if FileExist(exe) {
+        try {
+            Run exe
+            return true
+        }
+    }
+    return false
+}
+
+; Program okna, které je nahoře (ve Z-pořadí), bez oken tohoto skriptu a hlavního panelu.
+TopApplicationExe() {
+    ownPid := ProcessExist()
+    for hwnd in WinGetList() {
+        try {
+            if WinGetPID("ahk_id " . hwnd) = ownPid
+                continue
+            if InStr(WinGetClass("ahk_id " . hwnd), "Shell_") || InStr(WinGetClass("ahk_id " . hwnd), "Thumbnail")
+                || WinGetTitle("ahk_id " . hwnd) = ""
+                continue
+            return WinGetProcessName("ahk_id " . hwnd)
+        }
+    }
+    return ""
+}
 IsPasswordControl(hwnd) {
     return InStr(WinGetClass("ahk_id " . hwnd), "Edit") && (WinGetStyle("ahk_id " . hwnd) & 0x20)
 }

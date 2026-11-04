@@ -3,12 +3,35 @@ OnError TestError
 global g_overlay := Gui("+ToolWindow -Caption -DPIScale", "Hidden panel test")
 global MIN_TEXT_LEN := 300, WEEKLY_GOAL := 3000, POSTPONE_MIN := 30, POSTPONE_MAX := 3, START_HOUR := 0
 global g_inputHook := 0, g_log := Map(), g_mode := "starting", g_locked := false, g_done := false
-global g_btnUnlockGui := 0, g_btnUnlockBorder := 0, OVERLAY_W := 520
+global g_btnUnlockGui := 0, g_btnUnlockBorder := 0, OVERLAY_W := 520, g_quickPauseAvailable := true, g_postponedUntil := 0, g_postponeCount := 0
 global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected, lbl_result, lbl_errors
-global lbl_typed, lbl_typed_label, lbl_task, lbl_weekly, lbl_postpone, btn_postpone
+global lbl_typed, lbl_typed_label, lbl_task, lbl_weekly, lbl_postpone, btn_postpone, btn_spotify, btn_quick_pause
 global lbl_confirm, btn_confirm_yes, btn_confirm_no
 BuildOverlayUI(520, 1080)
 Assert(btn_postpone.Text = "⏸  Odložit  ( 30 min )", "postpone label and original design are preserved")
+btn_postpone.GetPos(&px, &py, &pw, &ph)
+btn_spotify.GetPos(&sx, &sy, &sw, &sh)
+Assert(sy > py + ph && sw = pw, "green Spotify bar sits below postpone")
+Assert(InStr(btn_spotify.Text, "Spotify"), "Spotify button is labelled")
+btn_quick_pause.GetPos(&qx, &qy, &qw, &qh)
+Assert(qy > sy + sh && qw = sw, "quick pause button sits below Spotify bar")
+Assert(InStr(btn_quick_pause.Text, "Zastavit") && InStr(btn_quick_pause.Text, "10 s"), "quick pause button is labelled with 10s duration")
+foundMediaShortcut := false
+for control in g_overlay {
+    if InStr(control.Text, "Ctrl+Alt+Mezerník") || InStr(control.Text, "Pauza videa")
+        foundMediaShortcut := true
+}
+Assert(!foundMediaShortcut, "video pause shortcut has been removed from keyboard list")
+Assert(g_quickPauseAvailable = true, "quick pause is available on initial startup")
+DoQuickPause()
+Assert(g_quickPauseAvailable = false, "quick pause is unavailable once used")
+Assert(g_postponedUntil > 0, "quick pause sets postponed timer")
+SetTimer ShowOverlayAgain, 0
+g_postponedUntil := 0
+DoPostpone()
+Assert(g_quickPauseAvailable = true, "normal postpone resets quick pause availability")
+SetTimer ShowOverlayAgain, 0
+g_postponedUntil := 0
 Assert(DllCall("SendMessageW", "ptr", g_overlay["PROG_BAR"].Hwnd, "uint", 0x407, "ptr", 0, "ptr", 0, "ptr") = 300, "daily progress range follows brother's limit")
 Assert(DllCall("SendMessageW", "ptr", g_overlay["PROG_WEEK"].Hwnd, "uint", 0x407, "ptr", 0, "ptr", 0, "ptr") = 3000, "weekly progress range follows brother's limit")
 for control in g_overlay
