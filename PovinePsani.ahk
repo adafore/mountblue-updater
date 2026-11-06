@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 20   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 21   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -30,10 +30,10 @@ SESSION_DAY       := ""
 DONE_FILE         := ""
 STATE_FILE        := ""
 SetDayFiles()
-DEFAULT_DAILY_GOAL := 250
-BROTHER_DAILY_GOAL := 450
+DEFAULT_DAILY_GOAL := 300
+BROTHER_DAILY_GOAL := 400
 DEFAULT_POSTPONE_COUNT := 3
-BROTHER_POSTPONE_COUNT := 1
+BROTHER_POSTPONE_COUNT := 2
 MIN_TEXT_LEN      := DEFAULT_DAILY_GOAL
 START_HOUR        := 11
 OVERLAY_W         := 520

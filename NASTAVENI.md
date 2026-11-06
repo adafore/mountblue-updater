@@ -14,7 +14,7 @@ muze vyzadovat opravneni k upravam. Verejny odkaz neni potreba.
 ## 2. Automaticke nastaveni znameho bratrova PC
 
 Od verze 14 se znamy bratruv ucet a pocitac nastavi automaticky pri startu.
-Dostane profil bratra (450 znaku denne, 4500 tydne). Pokud dosud nebyla
+Dostane profil bratra (400 znaku denne, 4000 tydne). Pokud dosud nebyla
 vybrana sdilena slozka, pouzije se `OneDrive\Attachments\OneNote` v jeho
 uzivatelske slozce Windows. Jiz vybrana slozka se neprepisuje.
 
@@ -39,11 +39,11 @@ program nevytvari nahradni slozku a nemeni opravneni OneDrivu.
 Vyber slozky ani zmena profilu nejsou soucasti bezneho panelu.
 Alternativne lze skript spustit s argumentem `--setup`.
 
-Bezny profil ma denni cil 250 znaku, bratruv profil 450 znaku.
+Bezny profil ma denni cil 300 znaku (3000 tydne), bratruv profil 400 znaku (4000 tydne).
 Tydenni cil je vzdy 10 * denni cil.
-Od verze 19 ma bratruv profil jedno odlozeni denne, bezny profil nadale tri.
-Od verze 20 ma bratruv profil denni cil 450 znaku (4500 tydne) a tlacitko rychleho odlozeni na 10 sekund.
-Pri uprave limitu se meni pouze `DEFAULT_DAILY_GOAL` a `BROTHER_DAILY_GOAL`.
+Bratruv profil ma 2 odlozeni denne, bezny profil nadale 3 odlozeni.
+K dispozici je take tlacitko rychleho odlozeni na 10 sekund.
+Pri uprave limitu se meni `DEFAULT_DAILY_GOAL`, `BROTHER_DAILY_GOAL`, `DEFAULT_POSTPONE_COUNT` a `BROTHER_POSTPONE_COUNT`.
 
 Profil je navazany na jedinecne ID instalace, ucet Windows a pocitac.
 Ulozen je v `%AppData%\MountBlueEnforcer\device.ini` a aktualizace jej zachovavaji.
