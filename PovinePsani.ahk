@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 21   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 22   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -249,6 +249,7 @@ if FileExist(DONE_FILE) {
 LoadState()
 
 ; Před 11:00 nedělej absolutně nic — jen čekej
+OnMessage(0x0218, OnPowerBroadcast)
 SetTimer CheckDateChange, 1000
 WaitUntilHour()
 if CheckDateChange()
@@ -393,7 +394,11 @@ WatchWindow(*) {
             if g_focusRetryCount = 1
                 QueuePracticeEvent("focus_retry", "", g_activationFailure)
         } else {
-            ShowStartupFailure()
+            ; Žádné chybové okno – pokračuj v automatickém zkoušení při dalším tiku
+            LockInput(false)
+            g_focusRetryCount++
+            if g_focusRetryCount = 1
+                QueuePracticeEvent("focus_retry", "", g_activationFailure)
         }
     } finally {
         g_watchWindowBusy := false
@@ -1925,13 +1930,98 @@ WaitUntilHour() {
 }
 
 
+; ─── Probuzení systému ze spánku ──────────────────────────────
+OnPowerBroadcast(wParam, lParam, msg, hwnd) {
+    ; 0x0004 = PBT_APMSUSPEND, 0x0007 = PBT_APMRESUMESUSPEND, 0x0012 = PBT_APMRESUMEAUTOMATIC
+    if (wParam = 7 || wParam = 18) {
+        SetTimer OnSystemWake, -1500
+    }
+    return true
+}
+
+OnSystemWake() {
+    global g_started, g_done, g_postponedUntil, g_mode
+    if CheckDateChange()
+        return
+    if !g_started || g_done
+        return
+    if (g_postponedUntil > 0 && A_TickCount >= g_postponedUntil) {
+        ShowOverlayAgain()
+        return
+    }
+    if (g_postponedUntil = 0) {
+        TryStartPractice()
+    }
+}
+
+CleanCrashedMountBlue() {
+    foundCrash := false
+    try {
+        for hwnd in WinGetList("ahk_exe MountBlue.exe") {
+            title := ""
+            try title := WinGetTitle("ahk_id " . hwnd)
+            if InStr(title, "výjimce") || InStr(title, "vyjimce") || InStr(title, "Exception") {
+                foundCrash := true
+                break
+            }
+        }
+    }
+    if foundCrash {
+        try ProcessClose("MountBlue.exe")
+        Sleep 500
+        return true
+    }
+    return false
+}
+
+ForceWinActivate(hwnd) {
+    if !hwnd
+        return false
+    try {
+        if WinGetMinMax("ahk_id " . hwnd) = -1
+            WinRestore "ahk_id " . hwnd
+    }
+    try WinActivate "ahk_id " . hwnd
+    if WinActive("ahk_id " . hwnd)
+        return true
+    try DllCall("SwitchToThisWindow", "ptr", hwnd, "int", 1)
+    if WinActive("ahk_id " . hwnd)
+        return true
+    try {
+        fgHwnd := DllCall("GetForegroundWindow", "ptr")
+        curThread := DllCall("GetCurrentThreadId", "uint")
+        fgThread := fgHwnd ? DllCall("GetWindowThreadProcessId", "ptr", fgHwnd, "ptr", 0, "uint") : 0
+        targetThread := DllCall("GetWindowThreadProcessId", "ptr", hwnd, "ptr", 0, "uint")
+        attachedFg := false, attachedTarget := false
+        if (fgThread && fgThread != curThread)
+            attachedFg := DllCall("AttachThreadInput", "uint", curThread, "uint", fgThread, "int", 1)
+        if (targetThread && targetThread != curThread)
+            attachedTarget := DllCall("AttachThreadInput", "uint", curThread, "uint", targetThread, "int", 1)
+        DllCall("AllowSetForegroundWindow", "uint", -1)
+        DllCall("SetForegroundWindow", "ptr", hwnd)
+        DllCall("BringWindowToTop", "ptr", hwnd)
+        if attachedFg
+            DllCall("AttachThreadInput", "uint", curThread, "uint", fgThread, "int", 0)
+        if attachedTarget
+            DllCall("AttachThreadInput", "uint", curThread, "uint", targetThread, "int", 0)
+    }
+    try DllCall("keybd_event", "uchar", 0, "uchar", 0, "uint", 0, "uptr", 0)
+    try DllCall("SetForegroundWindow", "ptr", hwnd)
+    return WinActive("ahk_id " . hwnd) != 0
+}
+
 ; ─── Najde hlavní okno MountBlue (největší ze všech oken procesu) ─
 GetMainMountBlueWindow() {
     bestHwnd := 0
     bestArea := 0
     for hwnd in WinGetList("ahk_exe MountBlue.exe") {
+        title := ""
+        try title := WinGetTitle("ahk_id " . hwnd)
+        if InStr(title, "výjimce") || InStr(title, "vyjimce") || InStr(title, "Exception")
+            || InStr(title, "GDI+") || InStr(title, "Cicero")
+            continue
         try {
-            WinGetPos &wx, &wy, &ww, &wh, "ahk_id " hwnd
+            WinGetPos &wx, &wy, &ww, &wh, "ahk_id " . hwnd
             area := ww * wh
             if area > bestArea {
                 bestArea := area
@@ -1947,12 +2037,14 @@ ActivateMountBlue(maxTries := 5) {
     global APP_PATH, g_activationFailure, g_mode, g_done
     g_activationFailure := ""
     startingMode := g_mode
+    CleanCrashedMountBlue()
     if !ProcessExist("MountBlue.exe") {
         if !FileExist(APP_PATH) {
             g_activationFailure := "missing_executable"
             return false
         }
-        try Run APP_PATH
+        SplitPath APP_PATH, , &appDir
+        try Run '"' . APP_PATH . '"', appDir
         catch {
             g_activationFailure := "launch_failed"
             return false
@@ -1963,6 +2055,12 @@ ActivateMountBlue(maxTries := 5) {
             g_activationFailure := "cancelled"
             return false
         }
+        if A_Index >= 4 && !GetMainMountBlueWindow() && ProcessExist("MountBlue.exe") {
+            try ProcessClose("MountBlue.exe")
+            Sleep 500
+            SplitPath APP_PATH, , &appDir
+            try Run '"' . APP_PATH . '"', appDir
+        }
         hwnd := GetMainMountBlueWindow()
         if !hwnd {
             g_activationFailure := "window_missing"
@@ -1971,9 +2069,7 @@ ActivateMountBlue(maxTries := 5) {
         }
         g_activationFailure := "focus_denied"
         try {
-            if WinGetMinMax("ahk_id " . hwnd) = -1
-                WinRestore "ahk_id " . hwnd
-            WinActivate "ahk_id " . hwnd
+            ForceWinActivate(hwnd)
             WinWaitActive("ahk_id " . hwnd,, 0.5)
             if g_done || g_mode != startingMode {
                 g_activationFailure := "cancelled"
@@ -2496,7 +2592,7 @@ SetPracticeMode(mode) {
 
 TryStartPractice() {
     global g_retryGui, g_lastClipboard, g_dailyDone, g_mode, g_done, g_startAttemptBusy
-    if g_startAttemptBusy
+    if g_startAttemptBusy || g_done
         return
     g_startAttemptBusy := true
     try {
@@ -2506,7 +2602,8 @@ TryStartPractice() {
         if g_done || g_mode != "starting"
             return
         if !activated {
-            ShowStartupFailure()
+            ; Nikdy neotevírej chybové okno – automaticky opakuj pokus v pozadí
+            SetTimer TryStartPractice, -800
             return
         }
         try A_Clipboard := ""
@@ -2544,20 +2641,10 @@ StartupFailureMessage(reason) {
 ShowStartupFailure() {
     global lbl_status, g_overlay, g_retryGui, g_activationFailure
     QueuePracticeEvent("startup_error", "", g_activationFailure)
-    SetPracticeMode("retry")
-    LockInput(false)
-    HideConfirm()
-    lbl_status.Value := "MountBlue není připravené. Zkus otevření znovu."
-    if !IsObject(g_retryGui) {
-        g_retryGui := Gui("+AlwaysOnTop", "MountBlue")
-        g_retryGui.SetFont("s10", "Segoe UI")
-        g_retryGui.AddText("w360 r6 vERROR_TEXT", "")
-        retry := g_retryGui.AddButton("w220 h32", "Zkusit otevření znovu")
-        retry.OnEvent("Click", (*) => TryStartPractice())
-        g_retryGui.OnEvent("Close", (*) => g_retryGui.Hide())
-    }
-    g_retryGui["ERROR_TEXT"].Value := StartupFailureMessage(g_activationFailure) . "`n`nOvládání PC zůstává dostupné."
-    g_retryGui.Show("AutoSize")
+    if IsObject(g_retryGui)
+        g_retryGui.Hide()
+    if IsObject(lbl_status)
+        lbl_status.Value := "Spouštím MountBlue..."
 }
 
 UnlockMouseDown(wParam, lParam, msg, hwnd) {
