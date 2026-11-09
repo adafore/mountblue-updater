@@ -2055,12 +2055,6 @@ ActivateMountBlue(maxTries := 5) {
             g_activationFailure := "cancelled"
             return false
         }
-        if A_Index >= 4 && !GetMainMountBlueWindow() && ProcessExist("MountBlue.exe") {
-            try ProcessClose("MountBlue.exe")
-            Sleep 500
-            SplitPath APP_PATH, , &appDir
-            try Run '"' . APP_PATH . '"', appDir
-        }
         hwnd := GetMainMountBlueWindow()
         if !hwnd {
             g_activationFailure := "window_missing"
