@@ -2035,10 +2035,12 @@ GetMainMountBlueWindow() {
 ; ─── Aktivuje hlavní okno MountBlue, NIKDY nemaximalizuje popupy ─
 ActivateMountBlue(maxTries := 5) {
     global APP_PATH, g_activationFailure, g_mode, g_done
+    static s_windowMissingCount := 0
     g_activationFailure := ""
     startingMode := g_mode
     CleanCrashedMountBlue()
     if !ProcessExist("MountBlue.exe") {
+        s_windowMissingCount := 0
         if !FileExist(APP_PATH) {
             g_activationFailure := "missing_executable"
             return false
@@ -2058,9 +2060,19 @@ ActivateMountBlue(maxTries := 5) {
         hwnd := GetMainMountBlueWindow()
         if !hwnd {
             g_activationFailure := "window_missing"
+            s_windowMissingCount++
+            ; Pokud proces běží, ale už více než 5 pokusů nemá žádné okno, je to zaseknutý zombie proces
+            if s_windowMissingCount >= 6 && ProcessExist("MountBlue.exe") {
+                s_windowMissingCount := 0
+                try ProcessClose("MountBlue.exe")
+                Sleep 500
+                SplitPath APP_PATH, , &appDir
+                try Run '"' . APP_PATH . '"', appDir
+            }
             Sleep 400
             continue
         }
+        s_windowMissingCount := 0
         g_activationFailure := "focus_denied"
         try {
             ForceWinActivate(hwnd)
