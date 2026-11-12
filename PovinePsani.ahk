@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 22   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 23   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -31,15 +31,15 @@ DONE_FILE         := ""
 STATE_FILE        := ""
 SetDayFiles()
 DEFAULT_DAILY_GOAL := 300
-BROTHER_DAILY_GOAL := 400
+BROTHER_DAILY_GOAL := 350
 DEFAULT_POSTPONE_COUNT := 3
-BROTHER_POSTPONE_COUNT := 2
+BROTHER_POSTPONE_COUNT := 3
 MIN_TEXT_LEN      := DEFAULT_DAILY_GOAL
 START_HOUR        := 11
 OVERLAY_W         := 520
 POSTPONE_MAX      := DEFAULT_POSTPONE_COUNT
 POSTPONE_MIN      := 30
-WEEKLY_GOAL       := MIN_TEXT_LEN * 10
+WEEKLY_GOAL       := MIN_TEXT_LEN * 9
 ; ───────────────────────────────────────────────────────────────
 
 ; ═══════════════════════════════════════════════════════════════
@@ -410,7 +410,7 @@ WatchWindow(*) {
 ; ═══════════════════════════════════════════════════════════════
 
 ; Ctrl+Enter = vyhodnoť
-#HotIf IsPracticeInputActive()
+#HotIf (IsPracticeInputActive() && g_textReady)
 ~^Enter:: {
     EvaluateExercise()
 }
@@ -454,6 +454,16 @@ WatchWindow(*) {
 
 ~^v:: RecordPracticePaste()
 ~+Insert:: RecordPracticePaste()
+#HotIf
+
+; ── Blokování psaní před načtením zadání (Shift+Win+T) ──────────
+#HotIf (IsPracticeInputActive() && !g_textReady)
+; Povolení OCR zkratky Shift+Win+T
+~#+t:: return
+
+; Blokování vložení textu před načtením zadání
+^v:: NotifyLoadTextFirst()
++Insert:: NotifyLoadTextFirst()
 #HotIf
 
 ; Blokování systémových zkratek
@@ -589,7 +599,7 @@ HandleKeyBS() {
 
 UpdateTypedPreview() {
     global g_typedText, lbl_typed, g_overlay
-    if !IsObject(g_overlay)
+    if !IsSet(g_overlay) || !IsObject(g_overlay)
         return
     preview := StrLen(g_typedText) > 120 ? "…" . SubStr(g_typedText, StrLen(g_typedText) - 119) : g_typedText
     lbl_typed.Value := preview
@@ -2320,7 +2330,7 @@ ApplyProfileLimits(role) {
     global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, DEFAULT_POSTPONE_COUNT, BROTHER_POSTPONE_COUNT
     global MIN_TEXT_LEN, WEEKLY_GOAL, POSTPONE_MAX
     MIN_TEXT_LEN := role = "brother" ? BROTHER_DAILY_GOAL : DEFAULT_DAILY_GOAL
-    WEEKLY_GOAL := MIN_TEXT_LEN * 10
+    WEEKLY_GOAL := MIN_TEXT_LEN * 9
     POSTPONE_MAX := role = "brother" ? BROTHER_POSTPONE_COUNT : DEFAULT_POSTPONE_COUNT
 }
 
@@ -2784,6 +2794,7 @@ IsSourceWindowActive() {
 
 StartPracticeInput() {
     global g_inputHook
+    InitBlockedPracticeKeys()
     g_inputHook := InputHook("V L0 I1")
     g_inputHook.OnChar := PracticeChar
     g_inputHook.NotifyNonText := true
@@ -2791,9 +2802,43 @@ StartPracticeInput() {
     g_inputHook.OnKeyDown := RecordPracticeEdit
 }
 
+InitBlockedPracticeKeys() {
+    HotIf (*) => (IsPracticeInputActive() && !g_textReady)
+    keys := [
+        "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z",
+        "0","1","2","3","4","5","6","7","8","9",
+        "Space","Tab","Enter","Backspace","Delete",
+        ",",".","-",";","'","[","]","\","/","``","=",
+        "Numpad0","Numpad1","Numpad2","Numpad3","Numpad4","Numpad5","Numpad6","Numpad7","Numpad8","Numpad9",
+        "NumpadDot","NumpadEnter","NumpadAdd","NumpadSub","NumpadMult","NumpadDiv",
+        "vkE2", "sc056", "sc029", "sc002", "sc003", "sc004", "sc005", "sc006", "sc007", "sc008", "sc009", "sc00A", "sc00B", "sc00C", "sc00D",
+        "sc010", "sc011", "sc012", "sc013", "sc014", "sc015", "sc016", "sc017", "sc018", "sc019", "sc01A", "sc01B",
+        "sc01E", "sc01F", "sc020", "sc021", "sc022", "sc023", "sc024", "sc025", "sc026", "sc027", "sc028", "sc02B",
+        "sc02C", "sc02D", "sc02E", "sc02F", "sc030", "sc031", "sc032", "sc033", "sc034", "sc035"
+    ]
+    for k in keys {
+        try Hotkey(k, BlockedPracticeKey)
+        try Hotkey("+" . k, BlockedPracticeKey)
+    }
+    HotIf
+}
+
+BlockedPracticeKey(*) {
+    NotifyLoadTextFirst()
+}
+
+NotifyLoadTextFirst() {
+    global lbl_status, g_overlay
+    if IsObject(g_overlay) && IsObject(lbl_status) {
+        lbl_status.Value := "Nejdříve načti zadání pomocí Shift + Win + T!"
+        lbl_status.SetFont("cFF6B35 w600")
+        SetTimer(() => UpdateOverlay(), -2000)
+    }
+}
+
 PracticeChar(hook, text) {
-    global g_awaitLetter
-    if !IsPracticeInputActive()
+    global g_awaitLetter, g_textReady
+    if !IsPracticeInputActive() || !g_textReady
         return
     if (text = "2" && GetKeyState("Numpad2", "P")) || (text = "3" && GetKeyState("Numpad3", "P"))
         return
@@ -2826,12 +2871,14 @@ RecordPracticeText(text, kind := "insert") {
 }
 
 RecordPracticePaste() {
-    if IsPracticeInputActive()
+    global g_textReady
+    if IsPracticeInputActive() && g_textReady
         RecordPracticeText(A_Clipboard, "paste")
 }
 
 RecordPracticeEdit(hook, vk, sc) {
-    if !IsPracticeInputActive()
+    global g_textReady
+    if !IsPracticeInputActive() || !g_textReady
         return
     EditPracticeBuffer(vk, GetKeyState("Ctrl", "P"), GetKeyState("Shift", "P"))
 }

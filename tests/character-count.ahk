@@ -86,6 +86,12 @@ if A_Args.Length = 3 {
     Assert(g_charsAccumulated = expectedScore && g_weeklyChars = 915 + expectedScore, "corrected daily and weekly progress survives a reload")
     FileAppend "Private regression correct characters: " . expectedScore . "`n", "*"
 }
+g_textReady := false
+ResetTypedInput()
+PracticeChar(0, "a")
+Assert(g_typedText = "", "typing is ignored when text is not ready")
+RecordPracticePaste()
+Assert(g_typedText = "", "pasting is ignored when text is not ready")
 FileAppend "All character count tests passed.`n", "*"
 ExitApp
 

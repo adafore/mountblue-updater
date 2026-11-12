@@ -1,20 +1,20 @@
 #Requires AutoHotkey v2.0
 global DONE_DIR := A_ScriptDir . "\..\..\device-log-test-" . DllCall("GetCurrentProcessId")
-global DEFAULT_DAILY_GOAL := 250, BROTHER_DAILY_GOAL := 300, MIN_TEXT_LEN := 250, WEEKLY_GOAL := 2500
+global DEFAULT_DAILY_GOAL := 250, BROTHER_DAILY_GOAL := 300, MIN_TEXT_LEN := 250, WEEKLY_GOAL := 2250
 global DEFAULT_POSTPONE_COUNT := 3, BROTHER_POSTPONE_COUNT := 1, POSTPONE_MAX := 3
 global g_device := Map(), g_log := Map(), lbl_log := 0, g_overlay := 0
 global g_typedText := "", g_caret := 0, g_anchor := 0
 DirCreate DONE_DIR
 InitDeviceConfig()
 firstId := g_device["id"]
-Assert(MIN_TEXT_LEN = 250 && WEEKLY_GOAL = 2500, "new installations use the normal profile")
+Assert(MIN_TEXT_LEN = 250 && WEEKLY_GOAL = 2250, "new installations use the normal profile")
 Assert(POSTPONE_MAX = 3, "normal installations retain three postponements")
 InitDeviceConfig()
 Assert(g_device["id"] = firstId, "installation ID survives a restart")
 shared := DONE_DIR . "\shared-offline"
 SaveDeviceConfig("brother", shared)
 InitDeviceConfig()
-Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 3000, "paired brother profile has 300 daily and 3000 weekly")
+Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 2700, "paired brother profile has 300 daily and 2700 weekly")
 Assert(POSTPONE_MAX = 1, "brother profile has one postponement")
 Assert(g_device["id"] = firstId && g_device["folder"] = shared, "updates preserve identity and selected folder")
 IniWrite "different-device", g_device["path"], "Device", "Binding"
@@ -27,10 +27,10 @@ SaveDeviceConfig("brother", shared)
 DEFAULT_DAILY_GOAL := 275
 BROTHER_DAILY_GOAL := 325
 ApplyProfileLimits("normal")
-Assert(MIN_TEXT_LEN = 275 && WEEKLY_GOAL = 2750, "normal weekly goal follows daily times ten")
+Assert(MIN_TEXT_LEN = 275 && WEEKLY_GOAL = 2475, "normal weekly goal follows daily times nine")
 Assert(POSTPONE_MAX = 3, "switching back to normal restores three postponements")
 ApplyProfileLimits("brother")
-Assert(MIN_TEXT_LEN = 325 && WEEKLY_GOAL = 3250, "brother weekly goal follows daily times ten")
+Assert(MIN_TEXT_LEN = 325 && WEEKLY_GOAL = 2925, "brother weekly goal follows daily times nine")
 InitPracticeLogs()
 RecordPracticeText("Příliš žluťoučký")
 EditPracticeBuffer(8)

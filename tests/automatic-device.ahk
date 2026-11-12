@@ -1,7 +1,7 @@
 #Requires AutoHotkey v2.0
 OnError TestError
 global DONE_DIR := A_ScriptDir . "\..\..\automatic-device-test-" . DllCall("GetCurrentProcessId")
-global DEFAULT_DAILY_GOAL := 250, BROTHER_DAILY_GOAL := 300, MIN_TEXT_LEN := 250, WEEKLY_GOAL := 2500
+global DEFAULT_DAILY_GOAL := 250, BROTHER_DAILY_GOAL := 300, MIN_TEXT_LEN := 250, WEEKLY_GOAL := 2250
 global DEFAULT_POSTPONE_COUNT := 3, BROTHER_POSTPONE_COUNT := 1, POSTPONE_MAX := 3
 global g_device := Map(), g_log := Map(), g_typedText := ""
 DirCreate DONE_DIR
@@ -32,7 +32,7 @@ if A_Args.Length {
     }
     SaveDeviceConfig(g_device["role"], g_device["folder"])
     ApplyProfileLimits(g_device["role"])
-    Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 3000, "automatic profile applies 300 daily and 3000 weekly")
+    Assert(MIN_TEXT_LEN = 300 && WEEKLY_GOAL = 2700, "automatic profile applies 300 daily and 2700 weekly")
     Assert(POSTPONE_MAX = 1, "known brother PC automatically gets one postponement")
     Assert(g_device["id"] = originalId, "automatic configuration preserves installation ID and log root")
     Assert(IniRead(g_device["path"], "Device", "AutomaticSetup") = "brother-shared-v1", "one-time migration marker is persisted")
