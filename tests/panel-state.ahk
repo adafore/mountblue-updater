@@ -64,6 +64,31 @@ Critical "Off"
 global APP_PATH := A_ScriptDir . "\nonexistent-mountblue.exe"
 if !ProcessExist("MountBlue.exe")
     Assert(!ActivateMountBlue(1), "failed startup does not report a usable MountBlue window")
+
+global DONE_DIR := A_ScriptDir . "\..\..\panel-eval-test-" . DllCall("GetCurrentProcessId")
+DirCreate DONE_DIR
+global SESSION_DAY := FormatTime(, "yyyy-MM-dd"), STATE_FILE := DONE_DIR . "\state.txt"
+global g_weekFile := DONE_DIR . "\week_state.txt", g_weekStartFile := DONE_DIR . "\week_start.txt"
+global g_evaluating := false, g_dailyDone := false, g_weeklyChars := 0, g_weeklyDays := 0, g_weeklyDone := false, g_weeklyLastDay := ""
+global g_charsAccumulated := 0, g_passedCount := 0, g_exerciseNum := 1, g_lastResult := "", g_lastErrors := 0, g_lastCorrectChars := 0
+global g_filterMode := "reverse", g_filterLetter := "a", g_filterRepeat := 2, g_awaitLetter := ""
+global g_caret := 0, g_anchor := 0, g_btnYesGui := 0, g_btnNoGui := 0, g_btnYesBorder := 0, g_btnNoBorder := 0
+global MIN_TEXT_LEN := 10000, WEEKLY_GOAL := 90000
+
+g_mode := "practice", g_textReady := true, g_sourceText := "one two three four five"
+g_typedText := "e x1 x2 x3 owt eno", g_caret := StrLen(g_typedText), g_anchor := StrLen(g_typedText)
+g_filterMode := "", g_filterRepeat := 1
+g_typedText := "one x1 x2 x3 five", g_caret := StrLen(g_typedText), g_anchor := StrLen(g_typedText)
+EvaluateExercise()
+Assert(g_lastErrors = 3 && g_mode = "practice" && g_sourceText = "" && !g_textReady && !IsObject(g_btnYesGui), "3 or fewer errors auto-confirm without showing confirm buttons")
+
+g_mode := "practice", g_textReady := true, g_sourceText := "one two three four five"
+g_typedText := "x1 x2 x3 x4 five", g_caret := StrLen(g_typedText), g_anchor := StrLen(g_typedText)
+EvaluateExercise()
+Assert(g_lastErrors = 4 && g_mode = "confirm" && IsObject(g_btnYesGui), "4 errors still show confirmation buttons")
+HideConfirm()
+
+try DirDelete(DONE_DIR, true)
 g_btnUnlockGui.Destroy()
 g_btnUnlockBorder.Destroy()
 g_overlay.Destroy()

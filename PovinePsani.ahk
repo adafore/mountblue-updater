@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 23   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 24   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -894,6 +894,21 @@ EvaluateExerciseInput() {
         return
     }
 
+    ; Při 3 a méně chybách se cvičení automaticky potvrdí jako ANO bez zobrazení dotazu.
+    if g_lastErrors <= 3 {
+        QueuePracticeEvent("confirm", "", "auto_yes")
+        g_sourceText := ""
+        g_textReady := false
+        g_filterMode := ""
+        g_filterLetter := ""
+        g_filterRepeat := 1
+        g_awaitLetter := ""
+        SaveState()
+        UpdateOverlay()
+        UpdateTask()
+        return
+    }
+
     ; Confirm se zobrazí pokud napsal 300+ znaků NEBO max 5 chyb
     confirmNeeded := (g_lastCorrectChars >= 300 || g_lastErrors <= 5)
 
@@ -901,10 +916,7 @@ EvaluateExerciseInput() {
         SaveState()
         UpdateOverlay()
         UpdateTask()
-
-        if confirmNeeded
-            ShowConfirm("Dokončil jsi cvičení?   znaky: " . g_lastCorrectChars . "  ·  chyby: " . g_lastErrors)
-
+        ShowConfirm("Dokončil jsi cvičení?   znaky: " . g_lastCorrectChars . "  ·  chyby: " . g_lastErrors)
         return   ; zbytek vyřeší ConfirmYes/ConfirmNo
     }
 
