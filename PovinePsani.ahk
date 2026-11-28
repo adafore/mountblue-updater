@@ -17,7 +17,7 @@ global g_mode           := "starting"
 UPDATE_VERSION_URL := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/version.txt"
 UPDATE_SCRIPT_URL  := "https://raw.githubusercontent.com/adafore/mountblue-updater/refs/heads/main/PovinePsani.ahk"
 LOCAL_VERSION_FILE := A_AppData . "\MountBlueEnforcer\version.txt"
-THIS_SCRIPT_VERSION := 27   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
+THIS_SCRIPT_VERSION := 28   ; ZVYŠ toto číslo při každém uploadu nové verze na GitHub
 UPDATE_TIMEOUT_MS   := 4000
 ; ─────────────────────────────────────────────────────────────
 
@@ -39,7 +39,15 @@ START_HOUR        := 11
 OVERLAY_W         := 520
 POSTPONE_MAX      := DEFAULT_POSTPONE_COUNT
 POSTPONE_MIN      := 30
-WEEKLY_GOAL       := MIN_TEXT_LEN * 9
+WEEKLY_GOAL       := MIN_TEXT_LEN * 8
+
+; ─── REŽIM ČASOVAČE PRO BRATRA (snadné přepnutí zpět přes false) ──
+BROTHER_TIMER_MODE          := true   ; true = 10 min aktivního psaní pro bratra; false = původní limit znaků
+BROTHER_TIMER_GOAL_SEC      := 600    ; 10 minut aktivního psaní
+BROTHER_PENALTY_SEC         := 120    ; +2 minuty trest za podvádění
+BROTHER_FUEL_PER_CHAR_SEC   := 0.70   ; aktivní čas na 1 platný úhoz (kalibrováno z logů bratra ~109 zn/min)
+BROTHER_FUEL_MAX_SEC        := 2.50   ; maximální zásoba času bez psaní (pauza po ~2.5 s)
+BROTHER_PENALTY_COOLDOWN_MS := 12000  ; minimální rozestup mezi tresty (12 s)
 ; ───────────────────────────────────────────────────────────────
 
 ; ═══════════════════════════════════════════════════════════════
@@ -212,6 +220,32 @@ global g_taskbarShields := Map()
 global g_spotifyGraceUntil := 0
 global g_startAttemptBusy := false
 
+; Stav časovače pro bratra
+global g_timerRemainingSec       := BROTHER_TIMER_GOAL_SEC
+global g_timerFuelSec            := 0.0
+global g_timerActive             := false
+global g_timerLastTick           := 0
+global g_timerLastSaveTick       := 0
+global g_timerFocusGainTick      := 0
+global g_timerWasPracticeActive  := false
+global g_timerPenaltyCount       := 0
+global g_timerHasPenalty         := false
+global g_timerLastPenaltyTick    := 0
+global g_timerPenaltyBannerUntil := 0
+global g_timerLastCheatReason    := ""
+global g_timerBuf                := ""
+global g_timerConsecChar         := ""
+global g_timerConsecCount        := 0
+global g_timerConsecSpace        := 0
+global g_timerBigramSet          := 0
+global g_timerKbRowSet           := 0
+global lbl_timer_clock           := 0
+global lbl_timer_state           := 0
+global lbl_timer_penalty         := 0
+global g_timerUiClockCache       := ""
+global g_timerUiStateCache       := ""
+global g_timerUiPenaltyCache     := ""
+
 ; Overlay labely
 global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
 global lbl_confirm, btn_confirm_yes, btn_confirm_no
@@ -236,8 +270,10 @@ if HasArgument("--setup") {
 }
 g_weekFile := A_AppData . "\MountBlueEnforcer\week_state.txt"
 g_weekStartFile := A_AppData . "\MountBlueEnforcer\week_start.txt"
-LoadWeeklyState()
-InitWeekWindow()
+if !IsBrotherTimerMode() {
+    LoadWeeklyState()
+    InitWeekWindow()
+}
 
 if FileExist(DONE_FILE) {
     if !IsWeeklyRequired()
@@ -265,7 +301,10 @@ OnExit PracticeExit
 StartPracticeInput()
 CreateOverlay()
 SetTimer WatchWindow, 250
-SetTimer PollClipboard, 800
+if IsBrotherTimerMode()
+    SetTimer BrotherTimerTick, 250
+else
+    SetTimer PollClipboard, 800
 SetTimer FlushPracticeLogs, 2000
 SetTimer SyncSharedLogs, 15000
 TryStartPractice()
@@ -280,6 +319,8 @@ ClipboardChanged(DataType) {
     global g_done, g_typedText, g_exerciseNum, lbl_status, g_overlay
     global g_lastClipboard, g_mode
 
+    if IsBrotherTimerMode()
+        return
     if (DataType != 1 || g_done || CheckDateChange())
         return
     if g_mode != "practice" && g_mode != "daily_done"
@@ -326,7 +367,7 @@ ClipboardChanged(DataType) {
 ; ═══════════════════════════════════════════════════════════════
 PollClipboard(*) {
     global g_done, g_lastClipboard
-    if g_done
+    if g_done || IsBrotherTimerMode()
         return
     current := A_Clipboard
     if (current != g_lastClipboard && StrLen(Trim(current)) >= 5) {
@@ -410,7 +451,7 @@ WatchWindow(*) {
 ; ═══════════════════════════════════════════════════════════════
 
 ; Ctrl+Enter = vyhodnoť
-#HotIf (IsPracticeInputActive() && g_textReady)
+#HotIf (IsPracticeInputActive() && g_textReady && !IsBrotherTimerMode())
 ~^Enter:: {
     EvaluateExercise()
 }
@@ -457,13 +498,19 @@ WatchWindow(*) {
 #HotIf
 
 ; ── Blokování psaní před načtením zadání (Shift+Win+T) ──────────
-#HotIf (IsPracticeInputActive() && !g_textReady)
+#HotIf (IsPracticeInputActive() && !g_textReady && !IsBrotherTimerMode())
 ; Povolení OCR zkratky Shift+Win+T
 ~#+t:: return
 
 ; Blokování vložení textu před načtením zadání
 ^v:: NotifyLoadTextFirst()
 +Insert:: NotifyLoadTextFirst()
+#HotIf
+
+; ── Blokování vložení textu v režimu časovače bratra ─────────────
+#HotIf (IsPracticeInputActive() && IsBrotherTimerMode())
+^v:: return
++Insert:: return
 #HotIf
 
 ; Blokování systémových zkratek
@@ -563,7 +610,7 @@ $Pause:: {
 #SuspendExempt False
 
 #HotIf
-#HotIf (IsPracticeInputActive() && g_textReady)
+#HotIf (IsPracticeInputActive() && g_textReady && !IsBrotherTimerMode())
 ~LButton:: {
     global g_typedText, g_lastResult, g_lastErrors
     ; Krátká pauza aby aplikace zpracovala klik
@@ -599,7 +646,7 @@ HandleKeyBS() {
 
 UpdateTypedPreview() {
     global g_typedText, lbl_typed, g_overlay
-    if !IsSet(g_overlay) || !IsObject(g_overlay)
+    if !IsSet(g_overlay) || !IsObject(g_overlay) || !IsSet(lbl_typed) || !IsObject(lbl_typed)
         return
     preview := StrLen(g_typedText) > 120 ? "…" . SubStr(g_typedText, StrLen(g_typedText) - 119) : g_typedText
     lbl_typed.Value := preview
@@ -935,6 +982,7 @@ DoPostpone() {
         return
     g_postponeCount++
     g_quickPauseAvailable := true   ; Resetuje se po každém normálním odložení
+    BrotherTimerPauseNow()
     msDelay := POSTPONE_MIN * 60 * 1000
     g_postponedUntil := A_TickCount + msDelay
     QueuePracticeEvent("postpone", "", String(g_postponeCount))
@@ -979,6 +1027,7 @@ DoQuickPause() {
     if g_done || CheckDateChange() || g_postponedUntil > 0 || !g_quickPauseAvailable
         return
     g_quickPauseAvailable := false
+    BrotherTimerPauseNow()
     msDelay := 10 * 1000  ; 10 sekund
     g_postponedUntil := A_TickCount + msDelay
     QueuePracticeEvent("quick_pause", "", "10s")
@@ -1031,6 +1080,10 @@ CreateOverlay() {
 }
 
 BuildOverlayUI(w, h) {
+    if IsBrotherTimerMode() {
+        BuildBrotherTimerOverlayUI(w, h)
+        return
+    }
     global g_overlay, MIN_TEXT_LEN
     global lbl_status, lbl_source_len, lbl_source_count, lbl_filter, lbl_expected
     global lbl_confirm, btn_confirm_yes, btn_confirm_no
@@ -1452,6 +1505,7 @@ DoUnlock() {
     SetPracticeMode("closing")
     g_done := true
     SetTimer WatchWindow, 0
+    SetTimer BrotherTimerTick, 0
     LockInput(false)
     if IsObject(g_btnUnlockGui) {
         g_btnUnlockGui.Destroy()
@@ -1468,8 +1522,10 @@ DoUnlock() {
 
 HideConfirm() {
     global lbl_confirm, btn_confirm_yes, btn_confirm_no, g_btnYesGui, g_btnNoGui, g_btnYesBorder, g_btnNoBorder
-    lbl_confirm.Value := ""
-    lbl_confirm.Move(,,, 0)
+    if IsSet(lbl_confirm) && IsObject(lbl_confirm) {
+        lbl_confirm.Value := ""
+        lbl_confirm.Move(,,, 0)
+    }
     if IsObject(g_btnYesBorder) {
         g_btnYesBorder.Destroy()
         g_btnYesBorder := 0
@@ -1539,6 +1595,10 @@ UpdateTask() {
     global g_weeklyChars, g_weeklyDays, g_weeklyDone, WEEKLY_GOAL, lbl_weekly
     if !IsObject(g_overlay)
         return
+    if IsBrotherTimerMode() {
+        UpdateBrotherTimerUI(true)
+        return
+    }
     remaining := Max(MIN_TEXT_LEN - g_charsAccumulated, 0)
     pct := Min(g_charsAccumulated, MIN_TEXT_LEN)
     lbl_task.Value := "Cvičení " . g_exerciseNum . "   ·   " . g_charsAccumulated . " / " . MIN_TEXT_LEN . " znaků   ·   chybí " . remaining
@@ -1570,6 +1630,10 @@ UpdateOverlay(statusOverride := "") {
 
     if !IsObject(g_overlay)
         return
+    if IsBrotherTimerMode() {
+        UpdateBrotherTimerOverlay(statusOverride)
+        return
+    }
     LogFilterState()
 
     ; ── Zadaný text ──
@@ -2175,6 +2239,8 @@ ReadWeekStart() {
 
 IsWeeklyRequired(now := "") {
     global g_weeklyDone
+    if IsBrotherTimerMode()
+        return false
     return !g_weeklyDone && IsWeeklyDeadline(now)
 }
 
@@ -2217,11 +2283,18 @@ SaveWeeklyState() {
 
 SaveState() {
     global STATE_FILE, DONE_DIR, g_postponeCount, g_charsAccumulated, g_exerciseNum
+    global g_timerRemainingSec, g_timerPenaltyCount
     if !IsSet(STATE_FILE) || STATE_FILE = "" || !IsSet(DONE_DIR) || DONE_DIR = ""
         return
     if !DirExist(DONE_DIR)
         DirCreate DONE_DIR
-    WriteStateFile(STATE_FILE, g_postponeCount . "`n" . g_charsAccumulated . "`n" . g_exerciseNum)
+    content := g_postponeCount . "`n" . g_charsAccumulated . "`n" . g_exerciseNum
+    if IsBrotherTimerMode() {
+        rem := IsSet(g_timerRemainingSec) ? Max(0, Ceil(g_timerRemainingSec)) : 600
+        pen := IsSet(g_timerPenaltyCount) ? Max(0, Integer(g_timerPenaltyCount)) : 0
+        content .= "`n" . rem . "`n" . pen
+    }
+    WriteStateFile(STATE_FILE, content)
 }
 
 WriteStateFile(path, contents) {
@@ -2243,17 +2316,27 @@ WriteStateFile(path, contents) {
 
 LoadState() {
     global STATE_FILE, g_postponeCount, g_charsAccumulated, g_exerciseNum, POSTPONE_MAX
+    global g_timerRemainingSec, g_timerPenaltyCount, BROTHER_TIMER_GOAL_SEC
     g_postponeCount := 0
     g_charsAccumulated := 0
     g_exerciseNum := 1
+    if IsSet(BROTHER_TIMER_GOAL_SEC)
+        g_timerRemainingSec := BROTHER_TIMER_GOAL_SEC
+    g_timerPenaltyCount := 0
     if !FileExist(STATE_FILE)
         return
     try {
         lines := StrSplit(FileRead(STATE_FILE), "`n")
         if lines.Length >= 3 {
-            g_postponeCount    := Min(POSTPONE_MAX, Max(Integer(lines[1]), 0))
-            g_charsAccumulated := Max(Integer(lines[2]), 0)
-            g_exerciseNum      := Max(Integer(lines[3]), 1)
+            g_postponeCount    := Min(POSTPONE_MAX, Max(Integer(Trim(lines[1], " `t`r`n")), 0))
+            g_charsAccumulated := Max(Integer(Trim(lines[2], " `t`r`n")), 0)
+            g_exerciseNum      := Max(Integer(Trim(lines[3], " `t`r`n")), 1)
+        }
+        if lines.Length >= 4 && Trim(lines[4], " `t`r`n") != "" {
+            g_timerRemainingSec := Max(0, Integer(Trim(lines[4], " `t`r`n")))
+        }
+        if lines.Length >= 5 && Trim(lines[5], " `t`r`n") != "" {
+            g_timerPenaltyCount := Max(0, Integer(Trim(lines[5], " `t`r`n")))
         }
     }
 }
@@ -2342,7 +2425,7 @@ ApplyProfileLimits(role) {
     global DEFAULT_DAILY_GOAL, BROTHER_DAILY_GOAL, DEFAULT_POSTPONE_COUNT, BROTHER_POSTPONE_COUNT
     global MIN_TEXT_LEN, WEEKLY_GOAL, POSTPONE_MAX
     MIN_TEXT_LEN := role = "brother" ? BROTHER_DAILY_GOAL : DEFAULT_DAILY_GOAL
-    WEEKLY_GOAL := MIN_TEXT_LEN * 9
+    WEEKLY_GOAL := MIN_TEXT_LEN * 8
     POSTPONE_MAX := role = "brother" ? BROTHER_POSTPONE_COUNT : DEFAULT_POSTPONE_COUNT
 }
 
@@ -2464,15 +2547,22 @@ CommitDeviceSetup(isBrother, folder) {
 }
 
 InitPracticeLogs() {
-    global DONE_DIR, g_device, g_log, MIN_TEXT_LEN, WEEKLY_GOAL
+    global DONE_DIR, g_device, g_log, MIN_TEXT_LEN, WEEKLY_GOAL, BROTHER_TIMER_GOAL_SEC, BROTHER_PENALTY_SEC
     root := DONE_DIR . "\logs\" . g_device["id"]
     day := FormatTime(, "yyyy-MM-dd")
     dir := root . "\" . day
     DirCreate dir
     name := FormatTime(, "HHmmss") . "_" . NewIdentifier()
     g_log := Map("root", root, "base", dir . "\" . name, "events", "", "report", "", "trace", "", "draft", "", "revision", 0, "status", "Záznamy: místně")
-    QueuePracticeEvent("session", "", "profile=" . g_device["role"] . ";daily=" . MIN_TEXT_LEN . ";weekly=" . WEEKLY_GOAL)
-    QueuePracticeReport("Nové sezení", "Profil: " . g_device["role"] . "`nDenní cíl: " . MIN_TEXT_LEN . "`nTýdenní cíl: " . WEEKLY_GOAL . "`nID instalace: " . g_device["id"])
+    if IsBrotherTimerMode() {
+        goalSec := IsSet(BROTHER_TIMER_GOAL_SEC) ? BROTHER_TIMER_GOAL_SEC : 600
+        penSec := IsSet(BROTHER_PENALTY_SEC) ? BROTHER_PENALTY_SEC : 120
+        QueuePracticeEvent("session", "", "profile=brother_timer;goalSec=" . goalSec . ";penaltySec=" . penSec)
+        QueuePracticeReport("Nové sezení", "Profil: brother (časovač aktivního psaní)`nDenní cíl: " . Round(goalSec / 60) . " min`nTrest za podvádění: +" . Round(penSec / 60) . " min`nID instalace: " . g_device["id"])
+    } else {
+        QueuePracticeEvent("session", "", "profile=" . g_device["role"] . ";daily=" . MIN_TEXT_LEN . ";weekly=" . WEEKLY_GOAL)
+        QueuePracticeReport("Nové sezení", "Profil: " . g_device["role"] . "`nDenní cíl: " . MIN_TEXT_LEN . "`nTýdenní cíl: " . WEEKLY_GOAL . "`nID instalace: " . g_device["id"])
+    }
 }
 
 LogReady() {
@@ -2634,9 +2724,11 @@ TryStartPractice() {
             SetTimer TryStartPractice, -800
             return
         }
-        try A_Clipboard := ""
-        g_lastClipboard := A_Clipboard
-        OnClipboardChange ClipboardChanged
+        if !IsBrotherTimerMode() {
+            try A_Clipboard := ""
+            g_lastClipboard := A_Clipboard
+            OnClipboardChange ClipboardChanged
+        }
         if IsObject(g_retryGui)
             g_retryGui.Hide()
         SetPracticeMode(g_dailyDone && !IsWeeklyRequired() ? "daily_done" : "practice")
@@ -2815,7 +2907,7 @@ StartPracticeInput() {
 }
 
 InitBlockedPracticeKeys() {
-    HotIf (*) => (IsPracticeInputActive() && !g_textReady)
+    HotIf (*) => (IsPracticeInputActive() && !g_textReady && !IsBrotherTimerMode())
     keys := [
         "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z",
         "0","1","2","3","4","5","6","7","8","9",
@@ -2850,6 +2942,13 @@ NotifyLoadTextFirst() {
 
 PracticeChar(hook, text) {
     global g_awaitLetter, g_textReady
+    if IsBrotherTimerMode() {
+        if !IsPracticeInputActive()
+            return
+        RecordPracticeText(text)
+        BrotherTimerOnChar(text)
+        return
+    }
     if !IsPracticeInputActive() || !g_textReady
         return
     if (text = "2" && GetKeyState("Numpad2", "P")) || (text = "3" && GetKeyState("Numpad3", "P"))
@@ -2890,6 +2989,12 @@ RecordPracticePaste() {
 
 RecordPracticeEdit(hook, vk, sc) {
     global g_textReady
+    if IsBrotherTimerMode() {
+        if !IsPracticeInputActive()
+            return
+        EditPracticeBuffer(vk, GetKeyState("Ctrl", "P"), GetKeyState("Shift", "P"))
+        return
+    }
     if !IsPracticeInputActive() || !g_textReady
         return
     EditPracticeBuffer(vk, GetKeyState("Ctrl", "P"), GetKeyState("Shift", "P"))
@@ -2944,4 +3049,631 @@ LogFilterState() {
         return
     g_log["filter"] := state
     QueuePracticeEvent("filter", "", state)
+}
+
+; ═══════════════════════════════════════════════════════════════
+;  REŽIM ČASOVAČE AKTIVNÍHO PSANÍ PRO BRATRA (10 MIN + ANTI-CHEAT)
+; ═══════════════════════════════════════════════════════════════
+
+IsBrotherTimerMode() {
+    global BROTHER_TIMER_MODE, g_device
+    return IsSet(BROTHER_TIMER_MODE) && BROTHER_TIMER_MODE
+        && IsSet(g_device) && IsObject(g_device) && g_device.Get("role", "normal") = "brother"
+}
+
+BrotherInitTables() {
+    global g_timerBigramSet, g_timerKbRowSet
+    if IsObject(g_timerBigramSet) && IsObject(g_timerKbRowSet)
+        return
+
+    g_timerBigramSet := Map()
+    vowels := "aeiouy"
+    cons := "bcdfghjklmnprstvz"
+    loop Parse vowels {
+        v := A_LoopField
+        loop Parse cons {
+            c := A_LoopField
+            g_timerBigramSet[v . c] := 1
+            g_timerBigramSet[c . v] := 1
+        }
+    }
+    clusters := "st,sk,sp,sl,sm,sn,sv,sr,sc,sh,sb,sd,sf,sg,sj,sz,"
+        . "pr,pl,ps,pt,pn,pk,pj,pv,pd,"
+        . "tr,tv,tl,tk,tm,tn,ts,tc,tj,tp,"
+        . "kr,kl,kv,kt,kn,km,ks,kc,kd,kj,kp,"
+        . "br,bl,bd,bj,bn,bs,bz,"
+        . "dr,dl,dv,dn,dm,ds,dz,dj,dk,"
+        . "gr,gl,gn,gd,"
+        . "vr,vl,vn,vm,vs,vz,vd,vk,vp,vt,vc,vj,vb,"
+        . "zr,zl,zv,zn,zm,zd,zk,zp,zt,zb,zc,zj,zh,"
+        . "fr,fl,ft,"
+        . "ch,hr,hl,hv,hn,hm,hd,hk,hs,ht,hb,hc,hz,"
+        . "mr,ml,mn,ms,mt,mk,mv,mz,mc,md,mp,"
+        . "nr,nl,nv,ns,nt,nk,nc,nd,nm,nz,nh,nj,np,nb,nf,"
+        . "rn,rm,rs,rt,rk,rc,rd,rv,rz,rb,rf,rg,rh,rj,rl,rp,rr,"
+        . "ln,lm,ls,lt,lk,lc,ld,lv,lz,lb,lf,lg,lh,lj,ll,lp,lr,"
+        . "jn,jm,js,jt,jk,jc,jd,jv,jz,jb,jh,jl,jp,jr,"
+        . "ck,ct,cn,cm,cs,cv,cz,cd,cl,cr,cp,cb,"
+        . "tt,nn,ss,mm,pp,kk,dd,cc,zz,jj,bb,vv,ff,gg,"
+        . "oo,ee,aa,ii,uu,ou,au,eu,ai,ei,oi,ui,ia,ie,io,iu,ae,ao,ea,eo,oa,oe,ua,ue,uo,"
+        . "sw,tw,kw,wh,we,wa,wi,wo,wr,ex,ax,ox,ix,ux,xt,xp,xc,qu"
+    for item in StrSplit(clusters, ",")
+        if item != ""
+            g_timerBigramSet[item] := 1
+
+    g_timerKbRowSet := Map()
+    rows := [
+        "qwertzuiop", "poiuztrewq",
+        "qwertyuiop", "poiuytrewq",
+        "asdfghjkl",  "lkjhgfdsa",
+        "yxcvbnm",    "mnbvcxy",
+        "zxcvbnm",    "mnbvcxz",
+        "1234567890", "0987654321",
+        "escrzyaie",  "eiayzrcse"
+    ]
+    for row in rows {
+        len := StrLen(row)
+        loop len - 3
+            g_timerKbRowSet[SubStr(row, A_Index, 4)] := 1
+    }
+}
+
+BrotherStripCzech(text) {
+    static from := "áčďéěíňóřšťúůýž"
+    static to   := "acdeeinorstuuyz"
+    s := StrLower(text)
+    loop Parse from {
+        s := StrReplace(s, A_LoopField, SubStr(to, A_Index, 1))
+    }
+    return s
+}
+
+BrotherTimerResetRuntime() {
+    global g_timerFuelSec, g_timerActive, g_timerLastTick, g_timerFocusGainTick
+    global g_timerWasPracticeActive, g_timerHasPenalty, g_timerLastPenaltyTick
+    global g_timerPenaltyBannerUntil, g_timerLastCheatReason
+    global g_timerBuf, g_timerConsecChar, g_timerConsecCount, g_timerConsecSpace
+    global g_timerUiClockCache, g_timerUiStateCache, g_timerUiPenaltyCache
+    g_timerFuelSec := 0.0
+    g_timerActive := false
+    g_timerLastTick := 0
+    g_timerFocusGainTick := 0
+    g_timerWasPracticeActive := false
+    g_timerHasPenalty := false
+    g_timerLastPenaltyTick := 0
+    g_timerPenaltyBannerUntil := 0
+    g_timerLastCheatReason := ""
+    g_timerBuf := ""
+    g_timerConsecChar := ""
+    g_timerConsecCount := 0
+    g_timerConsecSpace := 0
+    g_timerUiClockCache := ""
+    g_timerUiStateCache := ""
+    g_timerUiPenaltyCache := ""
+}
+
+BrotherTimerPauseNow() {
+    global g_timerFuelSec, g_timerActive, g_timerLastTick, g_timerWasPracticeActive
+    g_timerFuelSec := 0.0
+    g_timerActive := false
+    g_timerLastTick := 0
+    g_timerWasPracticeActive := false
+}
+
+BrotherFormatSeconds(sec) {
+    total := Max(0, Ceil(sec))
+    mins := total // 60
+    secs := Mod(total, 60)
+    return Format("{:02}:{:02}", mins, secs)
+}
+
+BrotherCheatLabel(code) {
+    if InStr(code, "held_key")
+        return "Držení jedné klávesy (+2:00)"
+    if InStr(code, "space_spam")
+        return "Opakované mačkání mezerníku (+2:00)"
+    if InStr(code, "kb_row")
+        return "Přejíždění po klávesnici (+2:00)"
+    if InStr(code, "repeat_cycle")
+        return "Opakování stejných znaků (+2:00)"
+    if InStr(code, "repeat_word") || InStr(code, "repeat_2word")
+        return "Opakování stejného slova (+2:00)"
+    if InStr(code, "single_letter_spam")
+        return "Náhodná jednotlivá písmena (+2:00)"
+    if InStr(code, "no_spaces_mash")
+        return "Náhodné psaní bez mezer (+2:00)"
+    return "Náhodné mačkání kláves (+2:00)"
+}
+
+BrotherCheckCheat(nowTick) {
+    global g_timerBuf, g_timerConsecChar, g_timerConsecCount, g_timerConsecSpace
+    global g_timerFocusGainTick, g_timerBigramSet, g_timerKbRowSet
+    BrotherInitTables()
+
+    inGrace := (g_timerFocusGainTick > 0 && (nowTick - g_timerFocusGainTick) < 1000)
+
+    ; 1. Držení jedné klávesy / opakování téhož znaku
+    if g_timerConsecCount >= 6
+        return inGrace ? "" : "held_key(" . g_timerConsecChar . "x" . g_timerConsecCount . ")"
+
+    ; 2. Spamování mezerníku
+    if g_timerConsecSpace >= 8
+        return inGrace ? "" : "space_spam(" . g_timerConsecSpace . ")"
+
+    bufLen := StrLen(g_timerBuf)
+
+    ; 3. Přejíždění řady klávesnice (4 po sobě jdoucí klávesy: qwer, asdf, yxcv, 1234, ěščř...)
+    tail12 := RegExReplace(SubStr(g_timerBuf, Max(1, bufLen - 11)), "[^a-z0-9]")
+    if StrLen(tail12) >= 4 {
+        sub4 := SubStr(tail12, StrLen(tail12) - 3)
+        if g_timerKbRowSet.Has(sub4)
+            return "kb_row(" . sub4 . ")"
+    }
+
+    ; 4. Krátký opakující se cyklus (např. abababab, asdasdasda, fjdkfjdkfjdk)
+    ns := RegExReplace(SubStr(g_timerBuf, Max(1, bufLen - 23)), "\s+")
+    nsLen := StrLen(ns)
+    for pair in [[2, 8], [3, 10], [4, 12]] {
+        p := pair[1], minLen := pair[2]
+        if nsLen >= minLen {
+            seg := SubStr(ns, nsLen - minLen + 1)
+            unit := SubStr(seg, minLen - p + 1)
+            allSame := true
+            firstU := SubStr(unit, 1, 1)
+            loop p {
+                if SubStr(unit, A_Index, 1) != firstU {
+                    allSame := false
+                    break
+                }
+            }
+            if allSame && inGrace
+                continue
+            isCycle := true
+            loop minLen {
+                idx := A_Index - 1
+                uIdx := Mod(idx - (minLen - p) + p * 10, p) + 1
+                if SubStr(seg, A_Index, 1) != SubStr(unit, uIdx, 1) {
+                    isCycle := false
+                    break
+                }
+            }
+            if isCycle
+                return "repeat_cycle(" . unit . ")"
+        }
+    }
+
+    ; Extrahuj slova [a-z]+ z bufferu
+    words := []
+    pos := 1
+    while RegExMatch(g_timerBuf, "[a-z]+", &m, pos) {
+        words.Push(m[0])
+        pos := m.Pos + m.Len
+    }
+    wCount := words.Length
+
+    ; 5. Opakování jednoho slova 4x za sebou nebo dvojice slov 3x za sebou
+    if wCount >= 4 {
+        lastW := words[wCount]
+        if words[wCount - 1] = lastW && words[wCount - 2] = lastW && words[wCount - 3] = lastW
+            return "repeat_word(" . lastW . ")"
+    }
+    if wCount >= 6 {
+        if words[wCount - 5] = words[wCount - 3] && words[wCount - 3] = words[wCount - 1]
+            && words[wCount - 4] = words[wCount - 2] && words[wCount - 2] = words[wCount]
+            return "repeat_2word(" . words[wCount - 1] . "_" . words[wCount] . ")"
+    }
+
+    ; 6. Spam jednotlivými písmeny s mezerami (např. "a s d f g h")
+    if wCount >= 6 {
+        allSingle := true
+        loop 6 {
+            if StrLen(words[wCount - A_Index + 1]) != 1 {
+                allSingle := false
+                break
+            }
+        }
+        if allSingle
+            return "single_letter_spam"
+    }
+
+    ; 7. 28 písmen v řadě bez jediné mezery
+    if bufLen >= 28 && RegExMatch(SubStr(g_timerBuf, bufLen - 27), "^[a-z]{28}$")
+        return "no_spaces_mash"
+
+    ; 8. Přirozenost češtiny v posuvném okně posledních 30 znaků
+    if bufLen >= 30 {
+        win := SubStr(g_timerBuf, bufLen - 29)
+        letters := RegExReplace(win, "[^a-z]")
+        lLen := StrLen(letters)
+        if lLen >= 20 {
+            vowelCount := 0
+            syllCount := 0
+            uniq := Map()
+            loop Parse letters {
+                ch := A_LoopField
+                uniq[ch] := 1
+                if InStr("aeiouy", ch) {
+                    vowelCount++
+                    syllCount++
+                } else if ch = "r" || ch = "l" {
+                    syllCount++
+                }
+            }
+            vr := vowelCount / lLen
+            sr := syllCount / lLen
+            if (vr < 0.16 && sr < 0.25) || vr > 0.75
+                return "bad_vowel_ratio(" . Format("{:.2f}", vr) . ")"
+            if uniq.Count <= 4
+                return "low_diversity(" . uniq.Count . ")"
+
+            pairTotal := 0
+            pairHits := 0
+            wPos := 1
+            while RegExMatch(win, "[a-z]+", &wm, wPos) {
+                wStr := wm[0]
+                wL := StrLen(wStr)
+                if wL >= 2 {
+                    loop wL - 1 {
+                        pairTotal++
+                        if g_timerBigramSet.Has(SubStr(wStr, A_Index, 2))
+                            pairHits++
+                    }
+                }
+                wPos := wm.Pos + wm.Len
+            }
+            if pairTotal >= 16 {
+                score := pairHits / pairTotal
+                if score < 0.80
+                    return "gibberish_bigrams(" . Format("{:.2f}", score) . ")"
+            }
+        }
+    }
+    return ""
+}
+
+BrotherTimerOnChar(text, nowTick := 0) {
+    global g_timerBuf, g_timerConsecChar, g_timerConsecCount, g_timerConsecSpace
+    global g_timerFuelSec, g_timerActive, g_timerRemainingSec
+    global g_timerPenaltyCount, g_timerHasPenalty, g_timerLastPenaltyTick
+    global g_timerPenaltyBannerUntil, g_timerLastCheatReason, g_timerFocusGainTick
+    global BROTHER_FUEL_PER_CHAR_SEC, BROTHER_FUEL_MAX_SEC, BROTHER_PENALTY_SEC, BROTHER_PENALTY_COOLDOWN_MS
+
+    if nowTick = 0
+        nowTick := A_TickCount
+    if g_timerFocusGainTick = 0
+        g_timerFocusGainTick := nowTick
+
+    norm := BrotherStripCzech(text)
+    if norm = ""
+        return false
+    c := SubStr(norm, 1, 1)
+
+    ; Ignoruj řídicí znaky (Enter, Tab apod.) — nepřidávají čas
+    if !RegExMatch(c, "^[a-z0-9 ,.\-?!:;'\x22()/]$")
+        return false
+
+    if c = " " {
+        g_timerConsecSpace++
+        g_timerConsecChar := ""
+        g_timerConsecCount := 0
+    } else {
+        g_timerConsecSpace := 0
+        if c = g_timerConsecChar
+            g_timerConsecCount++
+        else {
+            g_timerConsecChar := c
+            g_timerConsecCount := 1
+        }
+    }
+
+    g_timerBuf .= c
+    if StrLen(g_timerBuf) > 45
+        g_timerBuf := SubStr(g_timerBuf, StrLen(g_timerBuf) - 44)
+
+    reason := BrotherCheckCheat(nowTick)
+    if reason != "" {
+        g_timerFuelSec := 0.0
+        g_timerActive := false
+        if !g_timerHasPenalty || (nowTick - g_timerLastPenaltyTick) >= BROTHER_PENALTY_COOLDOWN_MS {
+            g_timerHasPenalty := true
+            g_timerLastPenaltyTick := nowTick
+            g_timerRemainingSec += BROTHER_PENALTY_SEC
+            g_timerPenaltyCount++
+            g_timerPenaltyBannerUntil := nowTick + 8000
+            g_timerLastCheatReason := BrotherCheatLabel(reason)
+            g_timerBuf := ""
+            QueuePracticeEvent("timer_penalty", reason, "remaining=" . Ceil(g_timerRemainingSec) . ";penalties=" . g_timerPenaltyCount)
+            QueuePracticeReport("Trest +2 minuty", g_timerLastCheatReason . "`nDůvod: " . reason . "`nZbývá: " . BrotherFormatSeconds(g_timerRemainingSec))
+            SaveState()
+            FlushPracticeLogs()
+            UpdateBrotherTimerUI(true)
+        }
+        return false
+    }
+
+    ; Krátké zmrazení (2.5 s) po udělení trestu, aby dojezd podvádění nepřidal čas
+    if g_timerHasPenalty && (nowTick - g_timerLastPenaltyTick) < 2500 {
+        g_timerFuelSec := 0.0
+        g_timerActive := false
+        return false
+    }
+
+    ; Opakování 3+ stejných znaků nebo 2+ mezer nedává aktivní čas (a při držení ho rovnou nuluje)
+    if g_timerConsecCount >= 5 || g_timerConsecSpace >= 5 {
+        g_timerFuelSec := 0.0
+        g_timerActive := false
+        return false
+    }
+    if g_timerConsecCount >= 3 || g_timerConsecSpace >= 2
+        return false
+
+    g_timerFuelSec := Min(BROTHER_FUEL_MAX_SEC, g_timerFuelSec + BROTHER_FUEL_PER_CHAR_SEC)
+    g_timerActive := true
+    return true
+}
+
+BrotherTimerStep(dtSec, isActive) {
+    global g_timerFuelSec, g_timerActive, g_timerRemainingSec
+    if !isActive {
+        g_timerFuelSec := 0.0
+        g_timerActive := false
+        return false
+    }
+    if dtSec > 0 && g_timerFuelSec > 0 {
+        spent := Min(dtSec, g_timerFuelSec)
+        g_timerFuelSec := Max(0.0, g_timerFuelSec - spent)
+        g_timerRemainingSec := Max(0.0, g_timerRemainingSec - spent)
+        g_timerActive := (g_timerFuelSec > 0.001)
+    } else {
+        g_timerActive := false
+    }
+    return g_timerRemainingSec <= 0
+}
+
+BrotherTimerTick(*) {
+    global g_started, g_done, g_passwordOpen, g_postponedUntil, g_mode
+    global g_timerLastTick, g_timerLastSaveTick, g_timerFocusGainTick, g_timerWasPracticeActive
+    global g_timerActive
+
+    if !IsBrotherTimerMode() || !g_started || g_done || g_passwordOpen || g_postponedUntil != 0 || g_mode != "practice" {
+        BrotherTimerPauseNow()
+        UpdateBrotherTimerUI()
+        return
+    }
+    if CheckDateChange()
+        return
+
+    now := A_TickCount
+    isActive := IsPracticeInputActive()
+    if isActive && !g_timerWasPracticeActive {
+        g_timerFocusGainTick := now
+        g_timerLastTick := now
+    }
+    g_timerWasPracticeActive := isActive
+
+    dt := g_timerLastTick > 0 ? Min(1.0, Max(0.0, (now - g_timerLastTick) / 1000.0)) : 0.0
+    g_timerLastTick := now
+
+    finished := BrotherTimerStep(dt, isActive)
+
+    if g_timerActive && (now - g_timerLastSaveTick >= 5000) {
+        g_timerLastSaveTick := now
+        SaveState()
+    }
+    UpdateBrotherTimerUI()
+    if finished
+        CompleteBrotherTimerDay()
+}
+
+CompleteBrotherTimerDay() {
+    global DONE_DIR, DONE_FILE, g_dailyDone, g_timerRemainingSec, g_timerPenaltyCount, g_typedText
+    global g_overlay, lbl_status
+
+    SetTimer BrotherTimerTick, 0
+    g_timerRemainingSec := 0
+    g_dailyDone := true
+    SaveState()
+
+    if !DirExist(DONE_DIR)
+        DirCreate DONE_DIR
+    timestamp := FormatTime(, "yyyy-MM-dd HH:mm:ss")
+    dayNum    := Integer(FormatTime(, "d"))
+    rand8     := Random(10000000, 99999999)
+    checkNum  := dayNum * rand8
+    if !FileExist(DONE_FILE)
+        FileAppend timestamp . "`n" . checkNum . "`n" . "dokonceni=casovac`n" . StrLen(g_typedText) . "`ntresty=" . g_timerPenaltyCount . "`n", DONE_FILE
+
+    QueuePracticeEvent("timer_done", "", "chars=" . StrLen(g_typedText) . ";penalties=" . g_timerPenaltyCount)
+    QueuePracticeReport("Časovač splněn", "Aktivně napsáno 10 minut.`nPočet trestů (+2 min): " . g_timerPenaltyCount)
+    FlushPracticeLogs()
+    UpdateBrotherTimerUI(true)
+    if IsObject(g_overlay) && IsSet(lbl_status) && IsObject(lbl_status) {
+        lbl_status.Value := "✔  Hotovo — odemykám PC"
+        lbl_status.SetFont("c3DFFA0 w700")
+    }
+    Sleep 600
+    DoUnlock()
+}
+
+BuildBrotherTimerOverlayUI(w, h) {
+    global g_overlay, BROTHER_TIMER_GOAL_SEC, POSTPONE_MAX, POSTPONE_MIN
+    global lbl_timer_clock, lbl_timer_state, lbl_timer_penalty
+    global lbl_postpone, btn_postpone, lbl_status, btn_spotify, btn_quick_pause
+    global g_timerRemainingSec
+
+    cAccent  := "E8425A"
+    cGreen   := "3DFFA0"
+    cYellow  := "FFD166"
+    cText    := "EEF0F7"
+    cSub     := "6B6F96"
+    cProg    := "1E2038"
+
+    pad  := 20
+    lw   := w - pad*2
+    ipad := pad + 8
+    ilw  := lw - 8
+    gapLabel := 6
+    gapSep   := 16
+
+    y := 0
+
+    ; ── HLAVIČKA ──
+    g_overlay.Add("Text", "x0 y0 w" . w . " h3 Background" . cAccent, "")
+    y += 18
+
+    g_overlay.SetFont("s15 w700 c" . cAccent, "Segoe UI")
+    g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw, "Mount Blue")
+    y += 28
+    g_overlay.SetFont("s8 w400 c" . cSub, "Segoe UI")
+    g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw, "Hlídač psacích cvičení")
+    y += 24
+
+    Sep(pad, y, w) , y += gapSep + 6
+
+    ; ── ZBÝVAJÍCÍ ČAS ──
+    g_overlay.SetFont("s8 w600 c" . cSub, "Segoe UI")
+    g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw, "ZBÝVAJÍCÍ ČAS PSANÍ")
+    y += 22
+
+    goalSec := IsSet(BROTHER_TIMER_GOAL_SEC) ? BROTHER_TIMER_GOAL_SEC : 600
+    remSec := IsSet(g_timerRemainingSec) ? g_timerRemainingSec : goalSec
+    g_overlay.SetFont("s36 w700 c" . cYellow, "Consolas")
+    lbl_timer_clock := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw . " h58 Center", BrotherFormatSeconds(remSec))
+    y += 66
+
+    g_overlay.Add("Progress", "x" . ipad . " y" . y . " w" . ilw . " h10 Background" . cProg . " c" . cGreen . " Range0-" . goalSec . " -Smooth vPROG_BAR", 0)
+    y += 24
+
+    g_overlay.SetFont("s10 w600 c" . cYellow, "Segoe UI")
+    lbl_timer_state := g_overlay.Add("Text", "x" . ipad . " y" . y . " w" . ilw . " h24 Center", "⏸  Čas stojí — piš reálný text")
+    y += 30
+
+    g_overlay.SetFont("s9 w600 cFF4D6D", "Segoe UI")
+    lbl_timer_penalty := g_overlay.Add("Text", "x" . ipad . " y" . y . " w" . ilw . " h36 Center", "")
+    y += 44
+
+    Sep(pad, y, w) , y += gapSep + 4
+
+    ; ── ODLOŽENÍ ──
+    g_overlay.SetFont("s7 w400 c" . cSub, "Segoe UI")
+    lbl_postpone := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw, "odložení:  0 / " . POSTPONE_MAX)
+    y += gapLabel + 10
+
+    g_overlay.SetFont("s9 w600 c" . cText, "Segoe UI")
+    btn_postpone := g_overlay.Add("Button", "x" . pad . " y" . y . " w" . lw . " h30", "⏸  Odložit  ( " . POSTPONE_MIN . " min )")
+    btn_postpone.OnEvent("Click", (*) => DoPostpone())
+    y += 42
+
+    Sep(pad, y, w) , y += gapSep
+
+    ; ── STATUS ──
+    g_overlay.SetFont("s8 w400 c" . cSub, "Segoe UI")
+    lbl_status := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw . " h42", "Čas se odečítá jen při plynulém psaní reálného textu. Náhodné klikání nebo držení klávesy přidá +2 min.")
+    y += 50
+
+    Sep(pad, y, w) , y += gapSep
+
+    ; ── SPOTIFY ──
+    g_overlay.SetFont("s10 w700 cFFFFFF", "Segoe UI")
+    btn_spotify := g_overlay.Add("Text", "x" . pad . " y" . y . " w" . lw . " h36 Center +0x200 Background1a7a3a", "♫   Spotify")
+    btn_spotify.OnEvent("Click", (*) => ToggleSpotifyWindow())
+    y += 44
+
+    ; ── ZASTAVIT TO, CO DĚLÁŠ (10 s) ──
+    g_overlay.SetFont("s9 w600 c" . cText, "Segoe UI")
+    btn_quick_pause := g_overlay.Add("Button", "x" . pad . " y" . y . " w" . lw . " h28", "⏸  Zastavit to, co děláš  ( 10 s )")
+    btn_quick_pause.OnEvent("Click", (*) => DoQuickPause())
+}
+
+UpdateBrotherTimerOverlay(statusOverride := "") {
+    global g_overlay, g_postponeCount, POSTPONE_MAX, POSTPONE_MIN, g_done, g_quickPauseAvailable
+    global btn_postpone, lbl_postpone, btn_quick_pause, lbl_status
+    if !IsObject(g_overlay)
+        return
+
+    if g_postponeCount >= POSTPONE_MAX {
+        btn_postpone.Enabled := false
+        btn_postpone.Text    := "odložení vyčerpána"
+        lbl_postpone.Value := "odložení:  " . POSTPONE_MAX . " / " . POSTPONE_MAX . "  (vyčerpáno)"
+        lbl_postpone.SetFont("c484C6E")
+    } else {
+        btn_postpone.Enabled := true
+        btn_postpone.Text := "⏸  Odložit  ( " . POSTPONE_MIN . " min )"
+        lbl_postpone.Value := "odložení:  " . g_postponeCount . " / " . POSTPONE_MAX
+        lbl_postpone.SetFont("c7A7FA8")
+    }
+
+    if IsSet(btn_quick_pause) && IsObject(btn_quick_pause) {
+        btn_quick_pause.Visible := g_quickPauseAvailable && !g_done
+        btn_quick_pause.Enabled := g_quickPauseAvailable && !g_done
+    }
+
+    if statusOverride != "" {
+        lbl_status.Value := statusOverride
+        lbl_status.SetFont("cFF6B35 w600")
+    } else if g_done {
+        lbl_status.Value := "✔  Hotovo — odemykám PC"
+        lbl_status.SetFont("c3DFFA0 w700")
+    } else {
+        lbl_status.Value := "Čas se odečítá jen při plynulém psaní reálného textu. Náhodné klikání nebo držení klávesy přidá +2 min."
+        lbl_status.SetFont("c7A7FA8 w400")
+    }
+
+    UpdateBrotherTimerUI(true)
+}
+
+UpdateBrotherTimerUI(force := false) {
+    global g_overlay, BROTHER_TIMER_GOAL_SEC, g_timerRemainingSec, g_timerActive, g_done
+    global g_timerPenaltyCount, g_timerPenaltyBannerUntil, g_timerLastCheatReason
+    global lbl_timer_clock, lbl_timer_state, lbl_timer_penalty
+    global g_timerUiClockCache, g_timerUiStateCache, g_timerUiPenaltyCache
+
+    if !IsSet(g_overlay) || !IsObject(g_overlay) || !IsSet(lbl_timer_clock) || !IsObject(lbl_timer_clock)
+        return
+
+    goalSec := IsSet(BROTHER_TIMER_GOAL_SEC) ? BROTHER_TIMER_GOAL_SEC : 600
+    remCeil := Max(0, Ceil(g_timerRemainingSec))
+    clockText := BrotherFormatSeconds(remCeil)
+    inBanner := (g_timerPenaltyBannerUntil > 0 && A_TickCount < g_timerPenaltyBannerUntil)
+
+    if g_done {
+        clockColor := "c3DFFA0"
+        stateText := "✔  Splněno!"
+        stateColor := "c3DFFA0"
+    } else if inBanner {
+        clockColor := "cFF4D6D"
+        stateText := "⚠  " . g_timerLastCheatReason
+        stateColor := "cFF4D6D"
+    } else if g_timerActive {
+        clockColor := "c3DFFA0"
+        stateText := "●  Čas běží — piš dál"
+        stateColor := "c3DFFA0"
+    } else {
+        clockColor := "cFFD166"
+        stateText := "⏸  Čas stojí — piš reálný text"
+        stateColor := "cFFD166"
+    }
+
+    clockKey := clockText . "|" . clockColor
+    if force || g_timerUiClockCache != clockKey {
+        g_timerUiClockCache := clockKey
+        lbl_timer_clock.Value := clockText
+        lbl_timer_clock.SetFont("s36 w700 " . clockColor, "Consolas")
+    }
+
+    stateKey := stateText . "|" . stateColor
+    if force || g_timerUiStateCache != stateKey {
+        g_timerUiStateCache := stateKey
+        lbl_timer_state.Value := stateText
+        lbl_timer_state.SetFont("s10 w600 " . stateColor, "Segoe UI")
+    }
+
+    penText := g_timerPenaltyCount > 0 ? "Tresty dnes: " . g_timerPenaltyCount . "×  (+" . (g_timerPenaltyCount * 2) . " min)" : ""
+    if force || g_timerUiPenaltyCache != penText {
+        g_timerUiPenaltyCache := penText
+        lbl_timer_penalty.Value := penText
+    }
+
+    doneSec := Max(0, Min(goalSec, goalSec - remCeil))
+    try g_overlay["PROG_BAR"].Value := doneSec
 }
